@@ -6,30 +6,16 @@ services:
       dockerfile: docker/backend.Dockerfile
     container_name: eastmoney-backend
     restart: unless-stopped
+    ports:
+      - "9000:9000" # 暴露 9000 端口给宿主机，供宿主机的 Nginx 反代
     volumes:
-      # 挂载 data 目录而不是单个文件，避免 Docker 自动创建目录的问题
       - ./data:/app/data
       - ./reports:/app/reports
       - ./config:/app/config
       - ./.env:/app/.env
     environment:
       - TZ=Asia/Shanghai
-      # 指定 DB 路径到挂载的目录中
       - DB_FILE_PATH=/app/data/funds.db
-    networks:
-      - app-network
-
-  # 前端服务 (Nginx)
-  frontend:
-    build:
-      context: .
-      dockerfile: docker/frontend.Dockerfile
-    container_name: eastmoney-frontend
-    restart: unless-stopped
-    ports:
-      - "80:80"
-    depends_on:
-      - backend
     networks:
       - app-network
 

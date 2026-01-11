@@ -4,7 +4,7 @@
 GREEN='\033[0;32m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}=== 开始部署 EastMoney 智能终端 ===${NC}"
+echo -e "${GREEN}=== 开始部署 EastMoney 后端服务 (Docker) ===${NC}"
 
 # 1. 检查 Docker 是否安装
 if ! command -v docker &> /dev/null; then
@@ -24,7 +24,7 @@ mkdir -p reports/sentiment
 mkdir -p config
 mkdir -p data
 
-# 3. 初始化数据库文件（避免 Docker 创建为目录）
+# 3. 初始化数据库文件
 if [ ! -f "data/funds.db" ]; then
     if [ -d "data/funds.db" ]; then
         echo "Removing erroneous directory 'data/funds.db'..."
@@ -34,14 +34,8 @@ if [ ! -f "data/funds.db" ]; then
     touch data/funds.db
 fi
 
-# 清理旧的根目录 funds.db（如果存在且不再使用）
-if [ -e "funds.db" ]; then
-    echo "Note: Legacy 'funds.db' found in root. Migration to 'data/funds.db' is handled by volume mapping if you manually moved data."
-    # Optional: mv funds.db data/funds.db if data/funds.db is empty
-fi
-
 # 4. 构建并启动容器
-echo -e "${GREEN}--> 构建并启动容器...${NC}"
+echo -e "${GREEN}--> 构建并启动后端容器...${NC}"
 if docker compose version &> /dev/null; then
     docker compose up -d --build
 else
@@ -56,5 +50,5 @@ else
     docker-compose ps
 fi
 
-echo -e "${GREEN}=== 服务已上线 ===${NC}"
-echo "域名访问: http://valpha.luminaBrain.cn"
+echo -e "${GREEN}=== 后端服务已在端口 9000 上线 ===${NC}"
+echo "请确保宿主机 Nginx 配置了反向代理指向 http://localhost:9000"
