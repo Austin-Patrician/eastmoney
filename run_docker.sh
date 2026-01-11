@@ -17,12 +17,22 @@ if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/
     exit 1
 fi
 
-# 2. 确保必要的目录存在 (避免 Docker 以 root 权限创建它们导致权限问题)
+# 2. 确保必要的目录和文件存在
 echo -e "${GREEN}--> 检查目录结构...${NC}"
 mkdir -p reports/commodities
 mkdir -p reports/sentiment
 mkdir -p config
-touch funds.db
+
+# 关键修复：如果 funds.db 是目录，先删除；确保它是一个文件
+if [ -d "funds.db" ]; then
+    echo "Warning: funds.db is a directory, removing it..."
+    rm -rf funds.db
+fi
+
+if [ ! -f "funds.db" ]; then
+    echo "Creating empty funds.db file..."
+    touch funds.db
+fi
 
 # 3. 构建并启动容器
 echo -e "${GREEN}--> 构建并启动容器...${NC}"
