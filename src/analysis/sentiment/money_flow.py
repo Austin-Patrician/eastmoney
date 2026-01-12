@@ -127,45 +127,89 @@ class MoneyFlowAnalyst:
         except Exception as e:
             print(f"ETF data error: {e}")
 
-        # 4. 北向资金 (现有逻辑)
+        # 4. 北向资金 (Time-based Strategy)
         try:
-            # 优先使用实时数据
-            df_north = ak.stock_hsgt_fund_flow_summary_em()
-            if df_north is not None and not df_north.empty:
-                 # 筛选北向
-                 north_rows = df_north[df_north['资金方向'] == '北向']
-                 total_net = 0.0
-                 for _, row in north_rows.iterrows():
-                     val = row.get('成交净买额', 0)
-                     if val:
-                         total_net += float(val) / 1e8 # 原始单位可能是元? 
-                         # stock_hsgt_fund_flow_summary_em returned value is usually in 亿元 for display or raw
-                         # Documentation says: 单位: 元. So / 1e8 is correct.
-                 
-                 # Correction: stock_hsgt_fund_flow_summary_em '成交净买额' is usually formatted string or raw. 
-                 # Let's rely on string parsing if needed, but akshare usually returns clean floats now.
-                 # Actually, let's stick to the simpler hsgt_hist logic if this is complex, 
-                 # BUT real-time is better.
-                 # Let's use the 'north_money' from existing logic as fallback, but try to get real-time sum here.
-                 pass
-
-            # 保留原有的历史获取逻辑作为兜底
-            hist_df = ak.stock_hsgt_hist_em(symbol="北向资金")
-            if hist_df is not None and not hist_df.empty:
-                if "日期" in hist_df.columns:
-                    hist_df["日期"] = pd.to_datetime(hist_df["日期"], errors="coerce")
-                    flow_col = None
-                    for col in ["当日成交净买额", "当日资金流入", "资金流入", "当日净流入"]:
-                        if col in hist_df.columns:
-                            flow_col = col
-                            break
+            current_hour = datetime.now().hour
+            use_hist = current_hour >= 15 # After 15:00 use Hist, else Min
+            
+            df_north_min = None
+            hist_df = None
+            
+            # Helper to parse Hist
+            def parse_hist(df):
+                if df is None or df.empty: return None, None
+                if "日期" in df.columns:
+                    df["日期"] = pd.to_datetime(df["日期"], errors="coerce")
+                    flow_col = next((c for c in ["当日成交净买额", "当日资金流入", "资金流入", "当日净流入"] if c in df.columns), None)
                     if flow_col:
-                        hist_df[flow_col] = pd.to_numeric(hist_df[flow_col], errors="coerce")
-                        last = hist_df.sort_values("日期").iloc[-1]
-                        data["north_money"] = round(float(last.get(flow_col)) / 100000000.0 if abs(float(last.get(flow_col))) > 10000 else float(last.get(flow_col)), 2) # Handle units carefully
-                        # Actually akshare hsgt_hist usually returns Million Yuan or Yuan. 
-                        # Let's assume it's large numbers.
-                        data["north_date"] = last.get("日期").strftime("%Y-%m-%d")
+                        df[flow_col] = pd.to_numeric(df[flow_col], errors="coerce")
+                        last = df.sort_values("日期").iloc[-1]
+                        val = float(last.get(flow_col))
+                        return round(val / 1e8 if abs(val) > 10000 else val, 2), last.get("日期").strftime("%Y-%m-%d")
+                return None, None
+
+            # Helper to parse Min
+            def parse_min(df):
+                if df is None or df.empty: return None, None
+                north_col = next((c for c in df.columns if "北向" in c), None)
+                last_val = 0.0
+                if north_col:
+                    last_val = pd.to_numeric(df.iloc[-1][north_col], errors='coerce')
+                else:
+                    sh_col = next((c for c in df.columns if "沪" in c), None)
+                    sz_col = next((c for c in df.columns if "深" in c), None)
+                    if sh_col and sz_col:
+                        v1 = pd.to_numeric(df.iloc[-1][sh_col], errors='coerce')
+                        v2 = pd.to_numeric(df.iloc[-1][sz_col], errors='coerce')
+                        last_val = (v1 if not pd.isna(v1) else 0) + (v2 if not pd.isna(v2) else 0)
+                
+                # Assume 0.0 might be invalid if mid-day, but valid if really 0.
+                # Unit check
+                val = round(last_val / 1e8 if abs(last_val) > 10000 else last_val, 2)
+                
+                date_col = next((c for c in df.columns if "日期" in c or "date" in c.lower()), None)
+                d_str = str(df.iloc[-1][date_col]) if date_col else datetime.now().strftime("%Y-%m-%d")
+                return val, d_str
+
+            # Strategy Execution
+            if not use_hist:
+                # < 15:00: Try Min First
+                try:
+                    df_north_min = ak.stock_hsgt_fund_min_em(symbol="北向资金")
+                except: pass
+                
+                val, d_str = parse_min(df_north_min)
+                if val is not None:
+                    data["north_money"] = val
+                    data["north_date"] = d_str
+                else:
+                    # Fallback to Hist
+                    try:
+                        hist_df = ak.stock_hsgt_hist_em(symbol="北向资金")
+                    except: pass
+                    val, d_str = parse_hist(hist_df)
+                    if val is not None:
+                        data["north_money"] = val
+                        data["north_date"] = d_str
+            else:
+                # >= 15:00: Try Hist First
+                try:
+                    hist_df = ak.stock_hsgt_hist_em(symbol="北向资金")
+                except: pass
+                
+                val, d_str = parse_hist(hist_df)
+                if val is not None:
+                    data["north_money"] = val
+                    data["north_date"] = d_str
+                else:
+                    # Fallback to Min
+                    try:
+                        df_north_min = ak.stock_hsgt_fund_min_em(symbol="北向资金")
+                    except: pass
+                    val, d_str = parse_min(df_north_min)
+                    if val is not None:
+                        data["north_money"] = val
+                        data["north_date"] = d_str
 
         except Exception as e:
             print(f"North money error: {e}")

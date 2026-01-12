@@ -70,19 +70,35 @@ class DashboardService:
             # 2. Turnover & Breadth
             # Breadth via Legu (Fast)
             try:
-                legu_df = ak.stock_market_activity_legu()
-                if not legu_df.empty:
-                    # Convert to dict {item: value}
-                    legu_map = dict(zip(legu_df['item'], legu_df['value']))
+                # legu_df = ak.stock_market_activity_legu()
+                # if not legu_df.empty:
+                #     # Convert to dict {item: value}
+                #     legu_map = dict(zip(legu_df['item'], legu_df['value']))
+                #     data["breadth"] = {
+                #         "up": int(float(legu_map.get("上涨", 0))),
+                #         "down": int(float(legu_map.get("下跌", 0))),
+                #         "flat": int(float(legu_map.get("平盘", 0))),
+                #         "limit_up": int(float(legu_map.get("涨停", 0))),
+                #         "limit_down": int(float(legu_map.get("跌停", 0)))
+                #     }
+                
+                df_spot = ak.stock_zh_a_spot_em()
+                if df_spot is not None and not df_spot.empty:
+                    up_count = len(df_spot[df_spot['涨跌幅'] > 0])
+                    down_count = len(df_spot[df_spot['涨跌幅'] < 0])
+                    flat_count = len(df_spot[df_spot['涨跌幅'] == 0])
+                    limit_up = len(df_spot[df_spot['涨跌幅'] >= 9.8]) # 粗略统计
+                    limit_down = len(df_spot[df_spot['涨跌幅'] <= -9.8])
+
                     data["breadth"] = {
-                        "up": int(float(legu_map.get("上涨", 0))),
-                        "down": int(float(legu_map.get("下跌", 0))),
-                        "flat": int(float(legu_map.get("平盘", 0))),
-                        "limit_up": int(float(legu_map.get("涨停", 0))),
-                        "limit_down": int(float(legu_map.get("跌停", 0)))
+                        "up": up_count,
+                        "down": down_count,
+                        "flat": flat_count,
+                        "limit_up": limit_up,
+                        "limit_down": limit_down
                     }
             except Exception as e:
-                print(f"Legu fetch failed: {e}")
+                print(f"stock_zh_a_spot_em fetch failed: {e}")
 
             # Turnover via Specific Daily Indices (SH Composite + SZ Composite)
             # Much faster than fetching all spot indices
