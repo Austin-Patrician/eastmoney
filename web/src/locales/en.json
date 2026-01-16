@@ -30,6 +30,8 @@
       "universe_sub": "Manage portfolio nodes",
       "stocks": "Stocks",
       "stocks_sub": "Equity Watchlist",
+      "recommendations": "AI Picks",
+      "recommendations_sub": "Smart recommendations",
       "sentiment": "Sentiment",
       "sentiment_sub": "Market vibe analysis",
       "intelligence": "Intelligence",
@@ -298,6 +300,88 @@
     },
     "language": "Language",
     "theme": "Theme"
+  },
+  "recommendations": {
+    "title": "AI Recommendations",
+    "subtitle": "AI-Powered Investment Recommendations",
+    "generate": "Generate",
+    "generating": "Analyzing...",
+    "force_refresh": "Force Refresh",
+    "last_updated": "Last Updated",
+    "no_data": "No recommendations available",
+    "no_data_hint": "Click \"Generate\" to get AI-powered investment recommendations",
+    "mode": {
+      "all": "All",
+      "short": "Short-Term",
+      "long": "Long-Term"
+    },
+    "tabs": {
+      "stocks": "Stocks",
+      "funds": "Funds"
+    },
+    "short_term": {
+      "title": "Short-Term Picks",
+      "subtitle": "7+ Days Holding Period",
+      "stocks": "Short-Term Stocks",
+      "funds": "Short-Term Funds"
+    },
+    "long_term": {
+      "title": "Long-Term Picks",
+      "subtitle": "3+ Months Holding Period",
+      "stocks": "Long-Term Stocks",
+      "funds": "Long-Term Funds"
+    },
+    "table": {
+      "rank": "#",
+      "code": "Code",
+      "name": "Name",
+      "price": "Price",
+      "change": "Change",
+      "score": "Score",
+      "pe": "PE",
+      "pb": "PB",
+      "market_cap": "Market Cap",
+      "net_inflow": "Net Inflow",
+      "volume_ratio": "Vol Ratio",
+      "confidence": "Confidence",
+      "logic": "Investment Logic",
+      "fund_type": "Type",
+      "return_1w": "1W Return",
+      "return_1m": "1M Return",
+      "return_3m": "3M Return",
+      "return_1y": "1Y Return",
+      "return_3y": "3Y Return",
+      "nav": "NAV"
+    },
+    "market_view": {
+      "title": "Market View",
+      "short_term": "Short-Term Outlook",
+      "long_term": "Macro Outlook"
+    },
+    "sector": {
+      "title": "Sector Preference",
+      "hot_sectors": "Hot Sectors"
+    },
+    "risk": {
+      "title": "Risk Warning",
+      "factors": "Risk Factors"
+    },
+    "confidence_levels": {
+      "high": "High",
+      "medium": "Medium",
+      "low": "Low"
+    },
+    "metadata": {
+      "screening_time": "Screening",
+      "llm_time": "AI Analysis",
+      "total_time": "Total Time"
+    },
+    "messages": {
+      "generate_started": "AI recommendation engine started, please wait...",
+      "generate_success": "Recommendations generated successfully!",
+      "generate_error": "Failed to generate recommendations",
+      "loading": "Loading recommendations..."
+    }
   }
 }
 

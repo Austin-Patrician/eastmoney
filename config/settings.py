@@ -17,8 +17,10 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 
 # Default Model Configuration
 # Using a high-reasoning model for analysis is recommended.
-GEMINI_MODEL = "gemini-2.0-flash-exp" 
+GEMINI_MODEL = "gemini-2.0-flash-exp"
 
+# Redis Configuration (Optional - falls back to in-memory cache if not configured)
+REDIS_URL = os.getenv("REDIS_URL")  # e.g., redis://localhost:6379/0 or redis://:password@host:port/db
 
 # Paths
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

@@ -14,3 +14,4 @@ python-jose[cryptography]
 passlib[argon2]
 python-multipart
 argon2-cffi
+redis

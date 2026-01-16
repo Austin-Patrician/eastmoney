@@ -10,6 +10,7 @@ import SentimentPage from './pages/Sentiment';
 import CommoditiesPage from './pages/Commodities';
 import SettingsPage from './pages/Settings';
 import LoginPage from './pages/Login';
+import RecommendationsPage from './pages/Recommendations';
 
 // Auth Guard
 const PrivateRoute = () => {
@@ -33,6 +34,7 @@ function App() {
                 <Route path="dashboard" element={<DashboardPage />} />
                 <Route path="funds" element={<FundsPage />} />
                 <Route path="stocks" element={<StocksPage />} />
+                <Route path="recommendations" element={<RecommendationsPage />} />
                 <Route path="sentiment" element={<SentimentPage />} />
                 <Route path="reports" element={<ReportsPage />} />
                 <Route path="commodities" element={<CommoditiesPage />} />

@@ -299,3 +299,111 @@ export const fetchStockReportContent = async (filename: string): Promise<string>
 export const deleteStockReport = async (filename: string): Promise<void> => {
     await api.delete(`/stocks/reports/${filename}`);
 };
+
+
+// --- Recommendation API ---
+
+export interface RecommendationStock {
+    code: string;
+    name: string;
+    current_price?: number;
+    price?: number;
+    change_pct?: number;
+    target_price?: number;
+    stop_loss?: number;
+    expected_return?: string;
+    recommendation_score: number;
+    investment_logic?: string;
+    risk_factors?: string[];
+    confidence?: string;
+    holding_period?: string;
+    market_cap?: number;
+    pe?: number;
+    pb?: number;
+    main_net_inflow?: number;
+    volume_ratio?: number;
+    score?: number;
+}
+
+export interface RecommendationFund {
+    code: string;
+    name: string;
+    current_nav?: number;
+    nav?: number;
+    fund_type?: string;
+    return_1w?: number;
+    return_1m?: number;
+    return_3m?: number;
+    return_6m?: number;
+    return_1y?: number;
+    return_3y?: number;
+    target_nav?: number;
+    recommendation_score: number;
+    investment_logic?: string;
+    risk_factors?: string[];
+    confidence?: string;
+    holding_period?: string;
+    score?: number;
+}
+
+export interface RecommendationResult {
+    mode: string;
+    generated_at: string;
+    short_term?: {
+        stocks?: RecommendationStock[];
+        funds?: RecommendationFund[];
+        short_term_stocks?: RecommendationStock[];
+        short_term_funds?: RecommendationFund[];
+        market_view?: string;
+        sector_preference?: string[];
+        risk_warning?: string;
+    };
+    long_term?: {
+        stocks?: RecommendationStock[];
+        funds?: RecommendationFund[];
+        long_term_stocks?: RecommendationStock[];
+        long_term_funds?: RecommendationFund[];
+        macro_view?: string;
+        sector_preference?: string[];
+        risk_warning?: string;
+    };
+    metadata?: {
+        screening_time?: number;
+        llm_time?: number;
+        total_time?: number;
+    };
+}
+
+export interface RecommendationRequest {
+    mode: 'short' | 'long' | 'all';
+    force_refresh?: boolean;
+}
+
+export const generateRecommendations = async (request: RecommendationRequest): Promise<RecommendationResult> => {
+    const response = await api.post('/recommend/generate', request);
+    return response.data;
+};
+
+export const fetchLatestRecommendations = async (): Promise<{
+    available: boolean;
+    data?: RecommendationResult;
+    generated_at?: string;
+    mode?: string;
+    message?: string;
+}> => {
+    const response = await api.get('/recommend/latest');
+    return response.data;
+};
+
+export interface RecommendationHistoryItem {
+    id: number;
+    mode: string;
+    generated_at: string;
+    short_term_count?: number;
+    long_term_count?: number;
+}
+
+export const fetchRecommendationHistory = async (limit: number = 20): Promise<RecommendationHistoryItem[]> => {
+    const response = await api.get('/recommend/history', { params: { limit } });
+    return response.data;
+};

@@ -30,6 +30,8 @@
       "universe_sub": "管理投资组合节点",
       "stocks": "股票",
       "stocks_sub": "自选股监控",
+      "recommendations": "AI精选",
+      "recommendations_sub": "智能投资推荐",
       "sentiment": "情绪",
       "sentiment_sub": "市场情绪分析",
       "intelligence": "情报",
@@ -298,6 +300,88 @@
     },
     "language": "语言",
     "theme": "主题"
+  },
+  "recommendations": {
+    "title": "AI 智能推荐",
+    "subtitle": "AI驱动的投资建议",
+    "generate": "生成推荐",
+    "generating": "分析中...",
+    "force_refresh": "强制刷新",
+    "last_updated": "更新时间",
+    "no_data": "暂无推荐数据",
+    "no_data_hint": "点击\"生成推荐\"获取AI智能投资建议",
+    "mode": {
+      "all": "全部",
+      "short": "短期",
+      "long": "长期"
+    },
+    "tabs": {
+      "stocks": "股票",
+      "funds": "基金"
+    },
+    "short_term": {
+      "title": "短期精选",
+      "subtitle": "7天以上持有期",
+      "stocks": "短期股票",
+      "funds": "短期基金"
+    },
+    "long_term": {
+      "title": "长期精选",
+      "subtitle": "3个月以上持有期",
+      "stocks": "长期股票",
+      "funds": "长期基金"
+    },
+    "table": {
+      "rank": "#",
+      "code": "代码",
+      "name": "名称",
+      "price": "价格",
+      "change": "涨跌幅",
+      "score": "评分",
+      "pe": "市盈率",
+      "pb": "市净率",
+      "market_cap": "市值",
+      "net_inflow": "主力净流入",
+      "volume_ratio": "量比",
+      "confidence": "置信度",
+      "logic": "投资逻辑",
+      "fund_type": "类型",
+      "return_1w": "近1周",
+      "return_1m": "近1月",
+      "return_3m": "近3月",
+      "return_1y": "近1年",
+      "return_3y": "近3年",
+      "nav": "净值"
+    },
+    "market_view": {
+      "title": "市场观点",
+      "short_term": "短期展望",
+      "long_term": "宏观展望"
+    },
+    "sector": {
+      "title": "板块偏好",
+      "hot_sectors": "热门板块"
+    },
+    "risk": {
+      "title": "风险提示",
+      "factors": "风险因素"
+    },
+    "confidence_levels": {
+      "high": "高",
+      "medium": "中",
+      "low": "低"
+    },
+    "metadata": {
+      "screening_time": "筛选耗时",
+      "llm_time": "AI分析",
+      "total_time": "总耗时"
+    },
+    "messages": {
+      "generate_started": "AI推荐引擎已启动，请稍候...",
+      "generate_success": "推荐生成成功！",
+      "generate_error": "生成推荐失败",
+      "loading": "加载推荐中..."
+    }
   }
 }
 

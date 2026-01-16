@@ -4,6 +4,7 @@ import json
 import asyncio
 import glob
 import threading
+import math
 from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
@@ -31,6 +32,30 @@ import akshare as ak
 import pandas as pd
 from src.auth import Token, UserCreate, User, create_access_token, get_password_hash, verify_password, get_current_user, create_user, get_user_by_username
 from fastapi.security import OAuth2PasswordRequestForm
+
+
+def sanitize_for_json(obj):
+    """
+    Recursively sanitize an object to ensure it's JSON-serializable.
+    Converts nan/inf floats to None.
+    """
+    if isinstance(obj, dict):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_for_json(item) for item in obj]
+    elif isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    elif isinstance(obj, (int, str, bool, type(None))):
+        return obj
+    else:
+        # Try to convert to string for unknown types
+        try:
+            return str(obj)
+        except:
+            return None
+
 
 # --- Startup/Shutdown ---
 @asynccontextmanager
@@ -1162,6 +1187,281 @@ async def get_stock_history_endpoint(code: str):
     except Exception as e:
         print(f"History error: {e}")
         return []
+
+
+# --- AI Recommendation API ---
+
+class RecommendationRequest(BaseModel):
+    mode: str = "all"  # "short", "long", "all"
+    force_refresh: bool = False
+
+
+class RecommendationResponse(BaseModel):
+    mode: str
+    generated_at: str
+    short_term: Optional[Dict[str, Any]] = None
+    long_term: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any]
+
+
+@app.post("/api/recommend/generate")
+async def generate_recommendations_endpoint(
+    request: RecommendationRequest = None,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Generate AI investment recommendations.
+
+    - mode: "short" (7+ days), "long" (3+ months), or "all"
+    - force_refresh: Force regenerate even if cached
+    """
+    mode = request.mode if request else "all"
+    force_refresh = request.force_refresh if request else False
+
+    if mode not in ["short", "long", "all"]:
+        raise HTTPException(status_code=400, detail="Invalid mode. Use 'short', 'long', or 'all'.")
+
+    try:
+        from src.analysis.recommendation import RecommendationEngine
+        from src.llm.client import get_llm_client
+        from src.data_sources.web_search import WebSearch
+        from src.cache import cache_manager
+
+        # Check cache first (unless force refresh)
+        if not force_refresh:
+            cache_key = f"recommendations:{current_user.id}:{mode}"
+            cached = cache_manager.get(cache_key)
+            if cached:
+                print(f"Returning cached recommendations for user {current_user.id}")
+                return sanitize_for_json(cached)
+
+        print(f"Generating {mode} recommendations for user {current_user.id}...")
+
+        # Initialize engine
+        llm_client = get_llm_client()
+        web_search = WebSearch()
+        engine = RecommendationEngine(
+            llm_client=llm_client,
+            web_search=web_search,
+            cache_manager=cache_manager
+        )
+
+        # Generate recommendations (run in thread to avoid blocking)
+        results = await asyncio.to_thread(
+            engine.generate_recommendations,
+            mode=mode,
+            use_llm=True
+        )
+
+        # Sanitize results to ensure JSON-serializable
+        results = sanitize_for_json(results)
+
+        # Cache results (4 hours)
+        cache_key = f"recommendations:{current_user.id}:{mode}"
+        cache_manager.set(cache_key, results, ttl=14400)
+
+        # Save to database
+        from src.storage.db import save_recommendation_report
+        save_recommendation_report({
+            "mode": mode,
+            "recommendations_json": results,
+            "market_context": results.get("metadata", {})
+        }, user_id=current_user.id)
+
+        return results
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/recommend/stocks/short")
+async def get_short_term_stock_recommendations(
+    limit: int = 10,
+    min_score: int = 60,
+    current_user: User = Depends(get_current_user)
+):
+    """Get short-term stock recommendations (7+ days)."""
+    try:
+        from src.storage.db import get_latest_recommendation_report
+
+        report = get_latest_recommendation_report(user_id=current_user.id, mode="short")
+        if not report and (report := get_latest_recommendation_report(user_id=current_user.id, mode="all")):
+            pass
+
+        if not report:
+            return {"recommendations": [], "message": "No recommendations available. Please generate first."}
+
+        data = report.get("recommendations_json", {})
+        short_term = data.get("short_term", {})
+        stocks = short_term.get("short_term_stocks", []) if isinstance(short_term, dict) else []
+
+        # Filter by min_score
+        filtered = [s for s in stocks if s.get("recommendation_score", 0) >= min_score]
+
+        return {
+            "recommendations": filtered[:limit],
+            "market_view": short_term.get("market_view", ""),
+            "generated_at": report.get("generated_at"),
+        }
+    except Exception as e:
+        print(f"Error: {e}")
+        return {"recommendations": [], "error": str(e)}
+
+
+@app.get("/api/recommend/stocks/long")
+async def get_long_term_stock_recommendations(
+    limit: int = 10,
+    min_score: int = 60,
+    current_user: User = Depends(get_current_user)
+):
+    """Get long-term stock recommendations (3+ months)."""
+    try:
+        from src.storage.db import get_latest_recommendation_report
+
+        report = get_latest_recommendation_report(user_id=current_user.id, mode="long")
+        if not report and (report := get_latest_recommendation_report(user_id=current_user.id, mode="all")):
+            pass
+
+        if not report:
+            return {"recommendations": [], "message": "No recommendations available. Please generate first."}
+
+        data = report.get("recommendations_json", {})
+        long_term = data.get("long_term", {})
+        stocks = long_term.get("long_term_stocks", []) if isinstance(long_term, dict) else []
+
+        filtered = [s for s in stocks if s.get("recommendation_score", 0) >= min_score]
+
+        return {
+            "recommendations": filtered[:limit],
+            "macro_view": long_term.get("macro_view", ""),
+            "generated_at": report.get("generated_at"),
+        }
+    except Exception as e:
+        print(f"Error: {e}")
+        return {"recommendations": [], "error": str(e)}
+
+
+@app.get("/api/recommend/funds/short")
+async def get_short_term_fund_recommendations(
+    limit: int = 5,
+    min_score: int = 60,
+    current_user: User = Depends(get_current_user)
+):
+    """Get short-term fund recommendations (7+ days)."""
+    try:
+        from src.storage.db import get_latest_recommendation_report
+
+        report = get_latest_recommendation_report(user_id=current_user.id, mode="short")
+        if not report and (report := get_latest_recommendation_report(user_id=current_user.id, mode="all")):
+            pass
+
+        if not report:
+            return {"recommendations": [], "message": "No recommendations available. Please generate first."}
+
+        data = report.get("recommendations_json", {})
+        short_term = data.get("short_term", {})
+        funds = short_term.get("short_term_funds", []) if isinstance(short_term, dict) else []
+
+        filtered = [f for f in funds if f.get("recommendation_score", 0) >= min_score]
+
+        return {
+            "recommendations": filtered[:limit],
+            "generated_at": report.get("generated_at"),
+        }
+    except Exception as e:
+        print(f"Error: {e}")
+        return {"recommendations": [], "error": str(e)}
+
+
+@app.get("/api/recommend/funds/long")
+async def get_long_term_fund_recommendations(
+    limit: int = 5,
+    min_score: int = 60,
+    current_user: User = Depends(get_current_user)
+):
+    """Get long-term fund recommendations (3+ months)."""
+    try:
+        from src.storage.db import get_latest_recommendation_report
+
+        report = get_latest_recommendation_report(user_id=current_user.id, mode="long")
+        if not report and (report := get_latest_recommendation_report(user_id=current_user.id, mode="all")):
+            pass
+
+        if not report:
+            return {"recommendations": [], "message": "No recommendations available. Please generate first."}
+
+        data = report.get("recommendations_json", {})
+        long_term = data.get("long_term", {})
+        funds = long_term.get("long_term_funds", []) if isinstance(long_term, dict) else []
+
+        filtered = [f for f in funds if f.get("recommendation_score", 0) >= min_score]
+
+        return {
+            "recommendations": filtered[:limit],
+            "generated_at": report.get("generated_at"),
+        }
+    except Exception as e:
+        print(f"Error: {e}")
+        return {"recommendations": [], "error": str(e)}
+
+
+@app.get("/api/recommend/latest")
+async def get_latest_recommendations(
+    current_user: User = Depends(get_current_user)
+):
+    """Get the latest recommendation report."""
+    try:
+        from src.storage.db import get_latest_recommendation_report
+
+        report = get_latest_recommendation_report(user_id=current_user.id)
+
+        if not report:
+            return {
+                "available": False,
+                "message": "No recommendations available. Please generate first using POST /api/recommend/generate"
+            }
+
+        return {
+            "available": True,
+            "data": report.get("recommendations_json", {}),
+            "generated_at": report.get("generated_at"),
+            "mode": report.get("mode"),
+        }
+    except Exception as e:
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/recommend/history")
+async def get_recommendation_history(
+    limit: int = 20,
+    current_user: User = Depends(get_current_user)
+):
+    """Get historical recommendation reports."""
+    try:
+        from src.storage.db import get_recommendation_reports
+
+        reports = get_recommendation_reports(user_id=current_user.id, limit=limit)
+
+        # Return summaries without full content
+        summaries = []
+        for r in reports:
+            data = r.get("recommendations_json", {})
+            summaries.append({
+                "id": r.get("id"),
+                "mode": r.get("mode"),
+                "generated_at": r.get("generated_at"),
+                "short_term_count": len(data.get("short_term", {}).get("short_term_stocks", [])) if data.get("short_term") else 0,
+                "long_term_count": len(data.get("long_term", {}).get("long_term_stocks", [])) if data.get("long_term") else 0,
+            })
+
+        return {"reports": summaries}
+    except Exception as e:
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     import uvicorn
