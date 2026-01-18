@@ -76,8 +76,21 @@ class ShortTermFundScreener(BaseScreener):
         return data
 
     def apply_filters(self, raw_data: Dict[str, Any]) -> List[Dict]:
-        """Apply short-term filtering rules - 严格筛选."""
+        """Apply short-term filtering rules - 严格筛选 + 用户偏好提前过滤."""
         candidates = []
+
+        # 获取用户偏好以便提前过滤
+        prefs = self.user_preferences or {}
+        preferred_types = prefs.get('preferred_fund_types', [])
+        excluded_types = prefs.get('excluded_fund_types', [])
+        min_scale = prefs.get('min_fund_scale')
+
+        filter_stats = {
+            'total': 0,
+            'type_filtered': 0,
+            'performance_filtered': 0,
+            'passed': 0,
+        }
 
         # Process open-end funds
         for key in ['fund_rank_stock', 'fund_rank_mixed']:
@@ -86,16 +99,33 @@ class ShortTermFundScreener(BaseScreener):
                 continue
 
             for _, row in df.iterrows():
+                filter_stats['total'] += 1
                 try:
                     code = str(row.get('基金代码', '')).strip()
                     name = str(row.get('基金简称', ''))
+                    fund_type = row.get('fund_type', '')
+
+                    # ===== 用户偏好提前过滤 =====
+
+                    # 1. 基金类型过滤（最先过滤）
+                    if preferred_types:
+                        if not any(pref in fund_type for pref in preferred_types):
+                            filter_stats['type_filtered'] += 1
+                            continue
+                    if excluded_types:
+                        if any(exc in fund_type for exc in excluded_types):
+                            filter_stats['type_filtered'] += 1
+                            continue
 
                     # 基本排除
                     if '指数' in name and '增强' not in name:
+                        filter_stats['type_filtered'] += 1
                         continue
                     if 'QDII' in name:
+                        filter_stats['type_filtered'] += 1
                         continue
                     if 'C' in code[-1:]:  # 排除C类份额（费用结构不同）
+                        filter_stats['type_filtered'] += 1
                         continue
 
                     # 获取业绩指标
@@ -109,25 +139,30 @@ class ShortTermFundScreener(BaseScreener):
 
                     # 1. 必须有近期数据
                     if return_1w is None or return_1m is None:
+                        filter_stats['performance_filtered'] += 1
                         continue
 
                     # 2. 近1周 > 0%（正收益）
                     if return_1w <= 0:
+                        filter_stats['performance_filtered'] += 1
                         continue
 
                     # 3. 近1月 > 2%（有明显上涨趋势）
                     if return_1m <= 2:
+                        filter_stats['performance_filtered'] += 1
                         continue
 
                     # 4. 近3月 > 0%（中期趋势向好）
                     if return_3m is not None and return_3m <= 0:
+                        filter_stats['performance_filtered'] += 1
                         continue
 
+                    filter_stats['passed'] += 1
                     candidate = {
                         'code': code,
                         'name': name,
                         'type': 'open_fund',
-                        'fund_type': row.get('fund_type', ''),
+                        'fund_type': fund_type,
                         'return_1w': return_1w,
                         'return_1m': return_1m,
                         'return_3m': return_3m,
@@ -145,49 +180,71 @@ class ShortTermFundScreener(BaseScreener):
         # Process ETFs - 更严格的筛选
         df_etf = raw_data.get('etf_spot', pd.DataFrame())
         if not df_etf.empty:
-            for _, row in df_etf.iterrows():
-                try:
-                    code = str(row.get('代码', '')).strip()
-                    name = str(row.get('名称', ''))
+            # Check if ETF is in preferred types (if specified)
+            etf_allowed = True
+            if preferred_types:
+                etf_allowed = any('ETF' in pref or 'etf' in pref.lower() for pref in preferred_types)
+            if excluded_types:
+                if any('ETF' in exc or 'etf' in exc.lower() for exc in excluded_types):
+                    etf_allowed = False
 
-                    # 排除货币/债券ETF
-                    if '货币' in name or '现金' in name or '债' in name:
+            if etf_allowed:
+                for _, row in df_etf.iterrows():
+                    filter_stats['total'] += 1
+                    try:
+                        code = str(row.get('代码', '')).strip()
+                        name = str(row.get('名称', ''))
+
+                        # 排除货币/债券ETF
+                        if '货币' in name or '现金' in name or '债' in name:
+                            filter_stats['type_filtered'] += 1
+                            continue
+
+                        # 获取指标
+                        price = self._safe_float(row.get('最新价'))
+                        change_pct = self._safe_float(row.get('涨跌幅'))
+                        turnover = self._safe_float(row.get('成交额'))
+
+                        # ===== 严格筛选条件 =====
+
+                        # 1. 成交额 > 1亿（高流动性）
+                        if not turnover or turnover < 1e8:
+                            filter_stats['performance_filtered'] += 1
+                            continue
+
+                        # 2. 必须有价格
+                        if not price or price <= 0:
+                            filter_stats['performance_filtered'] += 1
+                            continue
+
+                        # 3. 涨跌幅 > -2%（不追跌）
+                        if change_pct is not None and change_pct < -2:
+                            filter_stats['performance_filtered'] += 1
+                            continue
+
+                        filter_stats['passed'] += 1
+                        candidate = {
+                            'code': code,
+                            'name': name,
+                            'type': 'etf',
+                            'fund_type': 'ETF',
+                            'price': price,
+                            'change_pct': change_pct,
+                            'turnover': turnover,
+                            'return_1w': change_pct,
+                        }
+
+                        candidates.append(candidate)
+
+                    except Exception as e:
                         continue
 
-                    # 获取指标
-                    price = self._safe_float(row.get('最新价'))
-                    change_pct = self._safe_float(row.get('涨跌幅'))
-                    turnover = self._safe_float(row.get('成交额'))
-
-                    # ===== 严格筛选条件 =====
-
-                    # 1. 成交额 > 1亿（高流动性）
-                    if not turnover or turnover < 1e8:
-                        continue
-
-                    # 2. 必须有价格
-                    if not price or price <= 0:
-                        continue
-
-                    # 3. 涨跌幅 > -2%（不追跌）
-                    if change_pct is not None and change_pct < -2:
-                        continue
-
-                    candidate = {
-                        'code': code,
-                        'name': name,
-                        'type': 'etf',
-                        'fund_type': 'ETF',
-                        'price': price,
-                        'change_pct': change_pct,
-                        'turnover': turnover,
-                        'return_1w': change_pct,
-                    }
-
-                    candidates.append(candidate)
-
-                except Exception as e:
-                    continue
+        # 打印过滤统计
+        if self.user_preferences:
+            print(f"  📊 过滤统计: 总{filter_stats['total']} | "
+                  f"类型{filter_stats['type_filtered']} | "
+                  f"业绩{filter_stats['performance_filtered']} | "
+                  f"通过{filter_stats['passed']}")
 
         print(f"  ✓ 严格筛选后: {len(candidates)} 只基金/ETF")
         return candidates
@@ -357,8 +414,21 @@ class LongTermFundScreener(BaseScreener):
         return data
 
     def apply_filters(self, raw_data: Dict[str, Any]) -> List[Dict]:
-        """Apply long-term filtering rules - 严格筛选."""
+        """Apply long-term filtering rules - 严格筛选 + 用户偏好提前过滤."""
         candidates = []
+
+        # 获取用户偏好以便提前过滤
+        prefs = self.user_preferences or {}
+        preferred_types = prefs.get('preferred_fund_types', [])
+        excluded_types = prefs.get('excluded_fund_types', [])
+        min_scale = prefs.get('min_fund_scale')
+
+        filter_stats = {
+            'total': 0,
+            'type_filtered': 0,
+            'performance_filtered': 0,
+            'passed': 0,
+        }
 
         for key in ['fund_rank_stock', 'fund_rank_mixed', 'fund_rank_index']:
             df = raw_data.get(key, pd.DataFrame())
@@ -366,14 +436,30 @@ class LongTermFundScreener(BaseScreener):
                 continue
 
             for _, row in df.iterrows():
+                filter_stats['total'] += 1
                 try:
                     code = str(row.get('基金代码', '')).strip()
                     name = str(row.get('基金简称', ''))
+                    fund_type = row.get('fund_type', '')
+
+                    # ===== 用户偏好提前过滤 =====
+
+                    # 1. 基金类型过滤（最先过滤）
+                    if preferred_types:
+                        if not any(pref in fund_type for pref in preferred_types):
+                            filter_stats['type_filtered'] += 1
+                            continue
+                    if excluded_types:
+                        if any(exc in fund_type for exc in excluded_types):
+                            filter_stats['type_filtered'] += 1
+                            continue
 
                     # 基本排除
                     if 'QDII' in name:
+                        filter_stats['type_filtered'] += 1
                         continue
                     if 'C' in code[-1:]:  # 排除C类份额
+                        filter_stats['type_filtered'] += 1
                         continue
 
                     # 获取业绩指标
@@ -388,27 +474,32 @@ class LongTermFundScreener(BaseScreener):
 
                     # 1. 必须有1年业绩数据
                     if return_1y is None:
+                        filter_stats['performance_filtered'] += 1
                         continue
 
                     # 2. 近1年 > 5%（有明显正收益）
                     if return_1y <= 5:
+                        filter_stats['performance_filtered'] += 1
                         continue
 
                     # 3. 近6月 > 0%（中期趋势向好）
                     if return_6m is not None and return_6m <= 0:
+                        filter_stats['performance_filtered'] += 1
                         continue
 
                     # 4. 如果有3年数据，3年收益 > 15%
                     if return_3y is not None and return_3y <= 15:
+                        filter_stats['performance_filtered'] += 1
                         continue
 
                     has_long_history = return_3y is not None
 
+                    filter_stats['passed'] += 1
                     candidate = {
                         'code': code,
                         'name': name,
                         'type': 'open_fund',
-                        'fund_type': row.get('fund_type', ''),
+                        'fund_type': fund_type,
                         'return_1w': self._safe_float(row.get('近1周')),
                         'return_1m': return_1m,
                         'return_3m': return_3m,
@@ -425,6 +516,13 @@ class LongTermFundScreener(BaseScreener):
 
                 except Exception as e:
                     continue
+
+        # 打印过滤统计
+        if self.user_preferences:
+            print(f"  📊 过滤统计: 总{filter_stats['total']} | "
+                  f"类型{filter_stats['type_filtered']} | "
+                  f"业绩{filter_stats['performance_filtered']} | "
+                  f"通过{filter_stats['passed']}")
 
         print(f"  ✓ 严格筛选后: {len(candidates)} 只基金")
         return candidates

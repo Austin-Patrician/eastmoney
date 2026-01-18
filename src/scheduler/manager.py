@@ -4,7 +4,8 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 import logging
 import asyncio
-from typing import Dict, Optional
+from datetime import datetime, date
+from typing import Dict, Optional, Set
 from src.storage.db import get_active_funds, get_fund_by_code, get_active_stocks, get_stock_by_code
 from src.analysis.pre_market import PreMarketAnalyst
 from src.analysis.post_market import PostMarketAnalyst
@@ -12,6 +13,55 @@ from src.analysis.dashboard import DashboardService
 from src.report_gen import save_report, save_stock_report
 
 logger = logging.getLogger(__name__)
+
+
+class TradingCalendar:
+    """Trading calendar utility using akshare data"""
+    _instance = None
+    _trading_dates: Set[str] = set()
+    _last_refresh: Optional[date] = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(TradingCalendar, cls).__new__(cls)
+        return cls._instance
+
+    def refresh_calendar(self) -> bool:
+        """Refresh trading calendar from akshare, cache for the day"""
+        today = date.today()
+        if self._last_refresh == today and self._trading_dates:
+            return True
+
+        try:
+            import akshare as ak
+            df = ak.tool_trade_date_hist_sina()
+            # Column is 'trade_date' with format like '2024-01-02'
+            self._trading_dates = set(df['trade_date'].astype(str).tolist())
+            self._last_refresh = today
+            logger.info(f"Trading calendar refreshed, {len(self._trading_dates)} trading dates loaded")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to refresh trading calendar: {e}")
+            return False
+
+    def is_trading_day(self, check_date: Optional[date] = None) -> bool:
+        """Check if a given date is a trading day"""
+        if check_date is None:
+            check_date = date.today()
+
+        # Refresh calendar if needed
+        if not self._trading_dates or self._last_refresh != date.today():
+            if not self.refresh_calendar():
+                # Fallback: assume weekdays are trading days if API fails
+                logger.warning("Using fallback: treating weekdays as trading days")
+                return check_date.weekday() < 5
+
+        date_str = check_date.strftime('%Y-%m-%d')
+        return date_str in self._trading_dates
+
+
+# Global trading calendar instance
+trading_calendar = TradingCalendar()
 
 class SchedulerManager:
     _instance = None
@@ -118,8 +168,13 @@ class SchedulerManager:
 
     def run_analysis_task(self, fund_code: str, mode: str, user_id: Optional[int] = None):
         """Worker function"""
+        # Check if today is a trading day
+        if not trading_calendar.is_trading_day():
+            print(f"Skipping {mode.upper()}-market task for fund {fund_code} - not a trading day")
+            return
+
         print(f"Executing {mode.upper()}-market task for {fund_code} (User: {user_id})...")
-        
+
         # Re-fetch fund data. Pass user_id if we want to be strict, or None to find by code globally.
         # But wait, code might not be unique globally anymore. We MUST filter by user_id if we have it.
         fund = get_fund_by_code(fund_code, user_id=user_id)
@@ -150,6 +205,11 @@ class SchedulerManager:
 
     def add_stock_jobs(self, stock: Dict):
         """Add Pre/Post market jobs for a single stock"""
+        # Check if today is a trading day
+        if not trading_calendar.is_trading_day():
+            print(f"Skipping STOCK  - not a trading day")
+            return
+
         code = stock['code']
         user_id = stock.get('user_id')
 

@@ -258,6 +258,39 @@ def save_env_file(updates: Dict[str, str]):
 
 # --- Endpoints ---
 
+from src.llm.client import get_llm_client
+
+@app.post("/api/system/test-llm")
+async def test_llm_connection(current_user: User = Depends(get_current_user)):
+    try:
+        client = get_llm_client()
+        # Use asyncio.to_thread for network call
+        response = await asyncio.to_thread(client.generate_content, "Ping. Reply with 'Pong'.")
+        
+        if "Error:" in response:
+             return {"status": "error", "message": response}
+             
+        return {"status": "success", "message": "LLM Connection Verified", "reply": response}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+from src.data_sources.web_search import WebSearch
+
+@app.post("/api/system/test-search")
+async def test_search_connection(current_user: User = Depends(get_current_user)):
+    try:
+        searcher = WebSearch()
+        # Use asyncio.to_thread for network call
+        results = await asyncio.to_thread(searcher.search_news, "Apple stock price", max_results=3)
+        
+        if not results:
+             return {"status": "warning", "message": "Search returned no results (Check API Key limit or network)"}
+             
+        titles = [r.get("title") for r in results]
+        return {"status": "success", "message": "Search Connection Verified", "results": titles}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 @app.get("/api/dashboard/overview")
 async def get_dashboard_overview():
     try:
@@ -564,8 +597,6 @@ def get_market_indices():
         return _INDICES_CACHE["data"]
 
     try:
-        print("Fetching market indices via index_global_spot_em...")
-
         import akshare as ak
         indices_df = ak.index_global_spot_em()
         
@@ -1214,6 +1245,9 @@ async def generate_recommendations_endpoint(
 
     - mode: "short" (7+ days), "long" (3+ months), or "all"
     - force_refresh: Force regenerate even if cached
+
+    If user has configured investment preferences, recommendations will be
+    personalized based on those preferences (risk level, sector preferences, etc.)
     """
     mode = request.mode if request else "all"
     force_refresh = request.force_refresh if request else False
@@ -1226,16 +1260,33 @@ async def generate_recommendations_endpoint(
         from src.llm.client import get_llm_client
         from src.data_sources.web_search import WebSearch
         from src.cache import cache_manager
+        from src.storage.db import get_user_preferences
+
+        # Load user preferences (if configured)
+        user_preferences = None
+        try:
+            prefs_data = get_user_preferences(current_user.id)
+            if prefs_data and prefs_data.get('preferences'):
+                user_preferences = prefs_data.get('preferences')
+                print(f"Loaded personalized preferences for user {current_user.id}")
+                print(f"  - Risk level: {user_preferences.get('risk_level')}")
+                print(f"  - Preferred sectors: {user_preferences.get('preferred_sectors')}")
+                print(f"  - Excluded sectors: {user_preferences.get('excluded_sectors')}")
+                print(f"  - Preferred fund types: {user_preferences.get('preferred_fund_types')}")
+        except Exception as e:
+            print(f"No user preferences found: {e}")
 
         # Check cache first (unless force refresh)
+        # Include preferences hash in cache key for personalized results
+        prefs_hash = "personalized" if user_preferences else "default"
         if not force_refresh:
-            cache_key = f"recommendations:{current_user.id}:{mode}"
+            cache_key = f"recommendations:{current_user.id}:{mode}:{prefs_hash}"
             cached = cache_manager.get(cache_key)
             if cached:
                 print(f"Returning cached recommendations for user {current_user.id}")
                 return sanitize_for_json(cached)
 
-        print(f"Generating {mode} recommendations for user {current_user.id}...")
+        print(f"Generating {mode} recommendations for user {current_user.id} (personalized: {user_preferences is not None})...")
 
         # Initialize engine
         llm_client = get_llm_client()
@@ -1250,14 +1301,15 @@ async def generate_recommendations_endpoint(
         results = await asyncio.to_thread(
             engine.generate_recommendations,
             mode=mode,
-            use_llm=True
+            use_llm=True,
+            user_preferences=user_preferences
         )
 
         # Sanitize results to ensure JSON-serializable
         results = sanitize_for_json(results)
 
         # Cache results (4 hours)
-        cache_key = f"recommendations:{current_user.id}:{mode}"
+        cache_key = f"recommendations:{current_user.id}:{mode}:{prefs_hash}"
         cache_manager.set(cache_key, results, ttl=14400)
 
         # Save to database
@@ -1458,6 +1510,298 @@ async def get_recommendation_history(
             })
 
         return {"reports": summaries}
+    except Exception as e:
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ====================================================================
+# User Investment Preferences API
+# ====================================================================
+
+@app.get("/api/preferences")
+async def get_user_preferences_endpoint(
+    current_user: User = Depends(get_current_user)
+):
+    """Get user investment preferences."""
+    try:
+        from src.storage.db import get_user_preferences
+        from src.storage.user_preferences import RISK_LEVEL_PRESETS, RiskLevel
+
+        prefs = get_user_preferences(user_id=current_user.id)
+
+        if not prefs:
+            # Return default moderate preferences
+            default_prefs = RISK_LEVEL_PRESETS[RiskLevel.MODERATE].to_dict()
+            return {
+                "exists": False,
+                "preferences": default_prefs
+            }
+
+        return {
+            "exists": True,
+            "preferences": prefs.get("preferences", {}),
+            "updated_at": prefs.get("updated_at")
+        }
+    except Exception as e:
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/preferences")
+async def save_user_preferences_endpoint(
+    preferences: Dict,
+    current_user: User = Depends(get_current_user)
+):
+    """Save user investment preferences."""
+    try:
+        from src.storage.db import save_user_preferences
+
+        save_user_preferences(user_id=current_user.id, preferences=preferences)
+
+        return {
+            "success": True,
+            "message": "Investment preferences saved successfully"
+        }
+    except Exception as e:
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/preferences/presets")
+async def get_preference_presets():
+    """Get predefined risk level presets."""
+    try:
+        from src.storage.user_preferences import RISK_LEVEL_PRESETS, RiskLevel
+
+        presets = {}
+        for risk_level in RiskLevel:
+            presets[risk_level.value] = RISK_LEVEL_PRESETS[risk_level].to_dict()
+
+        return {"presets": presets}
+    except Exception as e:
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ====================================================================
+# Stock & Fund Details API
+# ====================================================================
+
+@app.get("/api/details/stock/{code}")
+async def get_stock_details(
+    code: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get detailed stock information."""
+    try:
+        import akshare as ak
+
+        # Get basic info
+        spot_df = ak.stock_zh_a_spot_em()
+        stock_info = spot_df[spot_df['代码'] == code]
+
+        if stock_info.empty:
+            raise HTTPException(status_code=404, detail="Stock not found")
+
+        stock_data = stock_info.iloc[0].to_dict()
+
+        # Get historical data (last 60 days)
+        try:
+            hist_df = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq")
+            if not hist_df.empty:
+                hist_df = hist_df.tail(60)
+                history = hist_df.to_dict('records')
+            else:
+                history = []
+        except:
+            history = []
+
+        # Get financial indicators
+        try:
+            financial_df = ak.stock_financial_analysis_indicator(symbol=code)
+            if not financial_df.empty:
+                financial_data = financial_df.iloc[0].to_dict()
+            else:
+                financial_data = {}
+        except:
+            financial_data = {}
+
+        return {
+            "code": code,
+            "name": stock_data.get('名称'),
+            "price": stock_data.get('最新价'),
+            "change_pct": stock_data.get('涨跌幅'),
+            "volume": stock_data.get('成交量'),
+            "turnover": stock_data.get('成交额'),
+            "pe": stock_data.get('市盈率-动态'),
+            "pb": stock_data.get('市净率'),
+            "market_cap": stock_data.get('总市值'),
+            "history": history,
+            "financial": financial_data,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/details/fund/{code}")
+async def get_fund_details(
+    code: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get detailed fund information."""
+    try:
+        import akshare as ak
+
+        # Get fund basic info
+        try:
+            info_df = ak.fund_individual_basic_info_xq(symbol=code)
+            basic_info = info_df.to_dict() if not info_df.empty else {}
+        except:
+            basic_info = {}
+
+        # Get fund NAV history
+        try:
+            nav_df = ak.fund_open_fund_info_em(fund=code, indicator="单位净值走势")
+            if not nav_df.empty:
+                nav_df = nav_df.tail(180)  # Last 180 days
+                nav_history = nav_df.to_dict('records')
+            else:
+                nav_history = []
+        except:
+            nav_history = []
+
+        # Get fund manager info
+        try:
+            manager_df = ak.fund_manager_em(fund=code)
+            manager_info = manager_df.to_dict('records') if not manager_df.empty else []
+        except:
+            manager_info = []
+
+        # Get holdings info
+        try:
+            holdings_df = ak.fund_portfolio_hold_em(symbol=code, date="")
+            if not holdings_df.empty:
+                holdings = holdings_df.head(10).to_dict('records')  # Top 10 holdings
+            else:
+                holdings = []
+        except:
+            holdings = []
+
+        return {
+            "code": code,
+            "name": basic_info.get('基金简称'),
+            "type": basic_info.get('基金类型'),
+            "basic_info": basic_info,
+            "nav_history": nav_history,
+            "manager_info": manager_info,
+            "top_holdings": holdings,
+        }
+    except Exception as e:
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ====================================================================
+# Comparison API
+# ====================================================================
+
+@app.post("/api/compare/stocks")
+async def compare_stocks(
+    codes: List[str],
+    current_user: User = Depends(get_current_user)
+):
+    """Compare multiple stocks side by side."""
+    try:
+        import akshare as ak
+
+        if len(codes) < 2 or len(codes) > 5:
+            raise HTTPException(status_code=400, detail="Please select 2-5 stocks to compare")
+
+        spot_df = ak.stock_zh_a_spot_em()
+        comparisons = []
+
+        for code in codes:
+            stock_info = spot_df[spot_df['代码'] == code]
+            if not stock_info.empty:
+                stock_data = stock_info.iloc[0]
+                comparisons.append({
+                    "code": code,
+                    "name": stock_data.get('名称'),
+                    "price": stock_data.get('最新价'),
+                    "change_pct": stock_data.get('涨跌幅'),
+                    "pe": stock_data.get('市盈率-动态'),
+                    "pb": stock_data.get('市净率'),
+                    "market_cap": stock_data.get('总市值'),
+                    "volume_ratio": stock_data.get('量比'),
+                    "turnover_rate": stock_data.get('换手率'),
+                    "amplitude": stock_data.get('振幅'),
+                })
+
+        if not comparisons:
+            raise HTTPException(status_code=404, detail="No valid stocks found")
+
+        return {"stocks": comparisons}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/compare/funds")
+async def compare_funds(
+    codes: List[str],
+    current_user: User = Depends(get_current_user)
+):
+    """Compare multiple funds side by side."""
+    try:
+        import akshare as ak
+
+        if len(codes) < 2 or len(codes) > 5:
+            raise HTTPException(status_code=400, detail="Please select 2-5 funds to compare")
+
+        comparisons = []
+
+        for code in codes:
+            try:
+                # Get fund ranking data
+                rank_data = None
+                for fund_type in ["股票型", "混合型", "指数型"]:
+                    try:
+                        df = ak.fund_open_fund_rank_em(symbol=fund_type)
+                        fund_row = df[df['基金代码'] == code]
+                        if not fund_row.empty:
+                            rank_data = fund_row.iloc[0]
+                            break
+                    except:
+                        continue
+
+                if rank_data is not None:
+                    comparisons.append({
+                        "code": code,
+                        "name": rank_data.get('基金简称'),
+                        "fund_type": fund_type,
+                        "nav": rank_data.get('单位净值'),
+                        "return_1w": rank_data.get('近1周'),
+                        "return_1m": rank_data.get('近1月'),
+                        "return_3m": rank_data.get('近3月'),
+                        "return_6m": rank_data.get('近6月'),
+                        "return_1y": rank_data.get('近1年'),
+                        "return_3y": rank_data.get('近3年'),
+                    })
+            except:
+                continue
+
+        if not comparisons:
+            raise HTTPException(status_code=404, detail="No valid funds found")
+
+        return {"funds": comparisons}
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))

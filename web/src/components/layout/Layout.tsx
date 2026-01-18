@@ -32,6 +32,7 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import PersonIcon from '@mui/icons-material/Person';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import MenuBookIcon from '@mui/icons-material/MenuBook';
 
 import { fetchMarketIndices } from '../../api';
 import type {IndexData} from '../../api';
@@ -291,7 +292,18 @@ export default function Layout() {
                             <PublicIcon fontSize="small" />
                         </IconButton>
                     </Tooltip>
-                    
+
+                    {/* Documentation Link - Opens in new tab */}
+                    <Tooltip title={t('layout.menu.documentation')}>
+                        <IconButton
+                            size="small"
+                            onClick={() => window.open('/doc', '_blank')}
+                            sx={{ color: '#94a3b8', '&:hover': { color: '#6366f1', bgcolor: '#f8fafc' } }}
+                        >
+                            <MenuBookIcon fontSize="small" />
+                        </IconButton>
+                    </Tooltip>
+
                     {/* Language Switcher */}
                     <Tooltip title="Switch Language">
                         <IconButton 

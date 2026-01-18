@@ -11,6 +11,7 @@ import CommoditiesPage from './pages/Commodities';
 import SettingsPage from './pages/Settings';
 import LoginPage from './pages/Login';
 import RecommendationsPage from './pages/Recommendations';
+import DocumentationPage from './pages/Documentation';
 
 // Auth Guard
 const PrivateRoute = () => {
@@ -26,6 +27,7 @@ function App() {
         <Routes>
           {/* Public Routes */}
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/doc" element={<DocumentationPage />} />
 
           {/* Protected Routes */}
           <Route element={<PrivateRoute />}>

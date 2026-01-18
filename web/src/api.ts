@@ -310,11 +310,14 @@ export interface RecommendationStock {
     price?: number;
     change_pct?: number;
     target_price?: number;
+    target_price_1y?: number;
     stop_loss?: number;
     expected_return?: string;
+    expected_return_1y?: string;
     recommendation_score: number;
     investment_logic?: string;
     risk_factors?: string[];
+    key_catalysts?: string[];
     confidence?: string;
     holding_period?: string;
     market_cap?: number;
@@ -323,6 +326,11 @@ export interface RecommendationStock {
     main_net_inflow?: number;
     volume_ratio?: number;
     score?: number;
+    why_now?: string;
+    competitive_advantage?: string;
+    valuation_analysis?: string;
+    industry_position?: string;
+    growth_drivers?: string[];
 }
 
 export interface RecommendationFund {
@@ -341,14 +349,22 @@ export interface RecommendationFund {
     recommendation_score: number;
     investment_logic?: string;
     risk_factors?: string[];
+    key_catalysts?: string[];
     confidence?: string;
     holding_period?: string;
     score?: number;
+    expected_return?: string;
+    expected_return_1y?: string;
+    why_now?: string;
+    manager_analysis?: string;
+    fund_style?: string;
+    suitable_for?: string;
 }
 
 export interface RecommendationResult {
     mode: string;
     generated_at: string;
+    personalized?: boolean;
     short_term?: {
         stocks?: RecommendationStock[];
         funds?: RecommendationFund[];
@@ -371,6 +387,7 @@ export interface RecommendationResult {
         screening_time?: number;
         llm_time?: number;
         total_time?: number;
+        personalized?: boolean;
     };
 }
 
@@ -405,5 +422,165 @@ export interface RecommendationHistoryItem {
 
 export const fetchRecommendationHistory = async (limit: number = 20): Promise<RecommendationHistoryItem[]> => {
     const response = await api.get('/recommend/history', { params: { limit } });
+    return response.data;
+};
+
+
+// --- User Preferences API ---
+
+export interface UserPreferences {
+    risk_level: 'conservative' | 'moderate' | 'aggressive' | 'speculative';
+    investment_horizon: 'short_term' | 'medium_term' | 'long_term';
+    investment_goal: 'capital_preservation' | 'steady_income' | 'capital_appreciation' | 'speculation';
+    investment_style: 'value' | 'growth' | 'blend' | 'momentum' | 'dividend';
+    total_capital?: number;
+    max_single_position: number;
+    max_sector_position: number;
+    max_drawdown_tolerance: number;
+    stop_loss_percentage: number;
+    take_profit_percentage?: number;
+    min_market_cap?: number;
+    max_market_cap?: number;
+    min_pe?: number;
+    max_pe?: number;
+    min_pb?: number;
+    max_pb?: number;
+    min_roe?: number;
+    min_dividend_yield?: number;
+    preferred_sectors: string[];
+    excluded_sectors: string[];
+    preferred_themes: string[];
+    preferred_fund_types: string[];
+    excluded_fund_types: string[];
+    min_fund_scale?: number;
+    max_fund_management_fee: number;
+    stock_recommendation_count: number;
+    fund_recommendation_count: number;
+    avoid_st_stocks: boolean;
+    avoid_new_stocks: boolean;
+    require_profitable: boolean;
+    min_liquidity?: number;
+    created_at?: string;
+    updated_at?: string;
+}
+
+export const getUserPreferences = async (): Promise<{
+    exists: boolean;
+    preferences: UserPreferences;
+    updated_at?: string;
+}> => {
+    const response = await api.get('/preferences');
+    return response.data;
+};
+
+export const saveUserPreferences = async (preferences: Partial<UserPreferences>): Promise<{
+    success: boolean;
+    message: string;
+}> => {
+    const response = await api.post('/preferences', preferences);
+    return response.data;
+};
+
+export const getPreferencePresets = async (): Promise<{
+    presets: Record<string, UserPreferences>;
+}> => {
+    const response = await api.get('/preferences/presets');
+    return response.data;
+};
+
+
+// --- Details API ---
+
+export interface StockDetails {
+    code: string;
+    name: string;
+    price: number;
+    change_pct: number;
+    volume: number;
+    turnover: number;
+    pe: number;
+    pb: number;
+    market_cap: number;
+    history: Array<{
+        日期: string;
+        开盘: number;
+        收盘: number;
+        最高: number;
+        最低: number;
+        成交量: number;
+        成交额: number;
+        振幅: number;
+        涨跌幅: number;
+        涨跌额: number;
+        换手率: number;
+    }>;
+    financial: Record<string, any>;
+}
+
+export interface FundDetails {
+    code: string;
+    name: string;
+    type: string;
+    basic_info: Record<string, any>;
+    nav_history: Array<{
+        净值日期: string;
+        单位净值: number;
+        累计净值: number;
+        日增长率: number;
+    }>;
+    manager_info: Array<Record<string, any>>;
+    top_holdings: Array<Record<string, any>>;
+}
+
+export const getStockDetails = async (code: string): Promise<StockDetails> => {
+    const response = await api.get(`/details/stock/${code}`);
+    return response.data;
+};
+
+export const getFundDetails = async (code: string): Promise<FundDetails> => {
+    const response = await api.get(`/details/fund/${code}`);
+    return response.data;
+};
+
+
+// --- Comparison API ---
+
+export interface StockComparison {
+    code: string;
+    name: string;
+    price: number;
+    change_pct: number;
+    pe: number;
+    pb: number;
+    market_cap: number;
+    volume_ratio: number;
+    turnover_rate: number;
+    amplitude: number;
+}
+
+export interface FundComparison {
+    code: string;
+    name: string;
+    fund_type: string;
+    nav: number;
+    return_1w: number;
+    return_1m: number;
+    return_3m: number;
+    return_6m: number;
+    return_1y: number;
+    return_3y: number;
+}
+
+export const compareStocks = async (codes: string[]): Promise<{
+    stocks: StockComparison[];
+}> => {
+    const response = await api.post('/compare/stocks', { codes });
+    return response.data;
+};
+
+export const compareFunds = async (codes: string[]): Promise<{
+    funds: FundComparison[];
+}> => {
+    const response = await api.post('/compare/funds', { codes });
     return response.data;
 };

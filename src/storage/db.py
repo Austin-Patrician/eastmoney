@@ -104,6 +104,17 @@ def init_db():
         )
     ''')
 
+    # 7. Create User Investment Preferences Table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS user_investment_preferences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER UNIQUE REFERENCES users(id),
+            preferences_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     # 3. Migration: Add user_id to funds if not exists
     try:
         c.execute('ALTER TABLE funds ADD COLUMN user_id INTEGER REFERENCES users(id)')
@@ -570,5 +581,66 @@ def expire_old_recommendations(days: int = 30):
         WHERE status = 'active'
         AND generated_at < datetime('now', ?)
     ''', (f'-{days} days',))
+    conn.commit()
+    conn.close()
+
+
+# --- User Investment Preferences Operations ---
+
+def get_user_preferences(user_id: int) -> Optional[Dict]:
+    """Get user investment preferences."""
+    conn = get_db_connection()
+    row = conn.execute(
+        'SELECT * FROM user_investment_preferences WHERE user_id = ?',
+        (user_id,)
+    ).fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    result = dict(row)
+    # Parse JSON
+    if result.get('preferences_json'):
+        try:
+            result['preferences'] = json.loads(result['preferences_json'])
+        except:
+            result['preferences'] = {}
+    return result
+
+
+def save_user_preferences(user_id: int, preferences: Dict):
+    """Save or update user investment preferences."""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    preferences_json = json.dumps(preferences, ensure_ascii=False)
+
+    # Check if exists
+    exists = c.execute(
+        'SELECT 1 FROM user_investment_preferences WHERE user_id = ?',
+        (user_id,)
+    ).fetchone()
+
+    if exists:
+        c.execute('''
+            UPDATE user_investment_preferences
+            SET preferences_json = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        ''', (preferences_json, user_id))
+    else:
+        c.execute('''
+            INSERT INTO user_investment_preferences (user_id, preferences_json)
+            VALUES (?, ?)
+        ''', (user_id, preferences_json))
+
+    conn.commit()
+    conn.close()
+
+
+def delete_user_preferences(user_id: int):
+    """Delete user investment preferences."""
+    conn = get_db_connection()
+    conn.execute('DELETE FROM user_investment_preferences WHERE user_id = ?', (user_id,))
     conn.commit()
     conn.close()

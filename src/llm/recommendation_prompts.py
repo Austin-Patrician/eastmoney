@@ -25,6 +25,7 @@ SHORT_TERM_RECOMMENDATION_PROMPT = """
 
 ### 近期热点板块
 {hot_sectors}
+{personalization_context}
 
 ## 输出要求
 
@@ -37,14 +38,20 @@ SHORT_TERM_RECOMMENDATION_PROMPT = """
       "code": "股票代码",
       "name": "股票名称",
       "current_price": 当前价格,
+      "change_pct": 涨跌幅,
+      "pe": 市盈率,
+      "market_cap": 市值,
+      "main_net_inflow": 主力净流入,
+      "volume_ratio": 量比,
       "recommendation_score": 推荐评分(60-100),
       "target_price": 目标价格,
       "stop_loss": 止损价格,
       "expected_return": "预期收益率如8-15%",
       "holding_period": "建议持有期如7-14天",
-      "investment_logic": "投资逻辑（100字内，说明为什么推荐）",
-      "key_catalysts": ["催化剂1", "催化剂2"],
-      "risk_factors": ["风险1", "风险2"],
+      "investment_logic": "【核心逻辑】说明为什么推荐此股，必须包含：1)具体数据支撑（如资金流入XX亿、量比X.X倍、PE仅XX倍等）；2)技术面判断（如突破XX均线、放量突破等）；3)催化剂（如XX政策利好、业绩预告等）。200字左右。",
+      "key_catalysts": ["具体催化剂1（需说明时间点）", "具体催化剂2"],
+      "risk_factors": ["具体风险1", "具体风险2"],
+      "why_now": "为什么现在是买入时机（结合技术位置、资金动向、事件驱动等）",
       "confidence": "高/中/低"
     }}
   ],
@@ -53,28 +60,32 @@ SHORT_TERM_RECOMMENDATION_PROMPT = """
       "code": "基金代码",
       "name": "基金名称",
       "current_nav": 当前净值或价格,
+      "fund_type": "基金类型",
+      "return_1w": 近1周收益率,
+      "return_1m": 近1月收益率,
       "recommendation_score": 推荐评分(60-100),
       "expected_return": "预期收益率如5-10%",
       "holding_period": "建议持有期如7-14天",
-      "investment_logic": "投资逻辑（100字内）",
-      "key_catalysts": ["催化剂1", "催化剂2"],
-      "risk_factors": ["风险1", "风险2"],
-      "fund_type": "基金类型",
+      "investment_logic": "【核心逻辑】说明为什么推荐此基金，必须包含：1)业绩数据（如近1周涨X%、近1月涨X%、跑赢同类X%等）；2)持仓方向判断（如重仓XX板块，当前XX板块处于上升期）；3)相对优势（如同类排名前X%、基金经理XX年经验等）。150字左右。",
+      "key_catalysts": ["具体催化剂1", "具体催化剂2"],
+      "risk_factors": ["具体风险1", "具体风险2"],
+      "why_now": "为什么现在是配置时机",
       "confidence": "高/中/低"
     }}
   ],
-  "market_view": "当前市场环境判断（50字内）",
+  "market_view": "当前市场环境判断（80字内，需要有具体指数点位、资金流向数据支撑）",
   "sector_preference": ["看好板块1", "看好板块2"],
-  "risk_warning": "整体风险提示",
+  "risk_warning": "整体风险提示（具体说明当前市场的主要风险点）",
   "generated_at": "{report_date}"
 }}
 ```
 
 ## 筛选标准
-- 股票推荐 **5-8只**，基金推荐 **3-5只**
+- 股票推荐 **{stock_recommendation_count}只**，基金推荐 **{fund_recommendation_count}只**
 - 推荐评分需 >= 70分
 - 股票必须有明确的止损位（建议设在支撑位或-5%~-8%）
 - 目标价基于技术分析设定（建议收益率8-20%）
+- **重要：investment_logic必须有具体数据支撑，不能使用模糊描述**
 - 优先推荐：
   - 有近期催化剂（业绩预告、政策利好等）
   - 资金持续流入
@@ -107,6 +118,7 @@ LONG_TERM_RECOMMENDATION_PROMPT = """
 
 ### 行业景气度
 {industry_outlook}
+{personalization_context}
 
 ## 输出要求
 
@@ -119,19 +131,20 @@ LONG_TERM_RECOMMENDATION_PROMPT = """
       "code": "股票代码",
       "name": "股票名称",
       "current_price": 当前价格,
+      "change_pct": 涨跌幅,
+      "pe": 市盈率,
+      "pb": 市净率,
+      "market_cap": 市值,
       "recommendation_score": 推荐评分(60-100),
       "target_price_1y": 1年目标价,
       "expected_return_1y": "1年预期收益率如20-40%",
-      "investment_logic": "投资逻辑（200字内，阐述核心投资价值）",
-      "competitive_advantage": "核心竞争优势（护城河）",
-      "growth_drivers": ["增长驱动1", "增长驱动2"],
-      "risk_factors": ["风险1", "风险2"],
-      "valuation_analysis": {{
-        "pe_ttm": 当前PE,
-        "pb": 当前PB,
-        "valuation_status": "低估/合理/略高"
-      }},
-      "industry_position": "行业地位描述",
+      "investment_logic": "【核心价值】深入阐述投资价值，必须包含：1)估值分析（当前PE/PB多少，处于历史什么分位，对比同行如何）；2)成长性数据（近3年营收/利润增速、未来增长空间）；3)竞争优势（具体的市占率、技术壁垒、品牌价值等）；4)行业地位（龙头/第几名、细分领域冠军等）。300字左右。",
+      "competitive_advantage": "核心竞争优势（护城河）- 需具体说明，如：拥有XX项专利、市占率XX%、品牌溢价能力等",
+      "valuation_analysis": "估值分析 - 当前PE XX倍，历史分位XX%，对比行业均值XX倍",
+      "growth_drivers": ["具体增长驱动1（需有数据）", "具体增长驱动2"],
+      "risk_factors": ["具体风险1", "具体风险2"],
+      "industry_position": "行业地位描述（需具体，如行业第几、市占率多少）",
+      "why_now": "为什么当前估值具有吸引力（结合历史估值区间、行业对比等）",
       "confidence": "高/中/低"
     }}
   ],
@@ -140,31 +153,32 @@ LONG_TERM_RECOMMENDATION_PROMPT = """
       "code": "基金代码",
       "name": "基金名称",
       "current_nav": 当前净值,
+      "fund_type": "基金类型",
+      "return_1y": 近1年收益率,
+      "return_3y": 近3年收益率,
       "recommendation_score": 推荐评分(60-100),
       "expected_return_1y": "1年预期收益率如15-30%",
-      "investment_logic": "投资逻辑（200字内）",
-      "fund_style": "基金风格（成长/价值/均衡）",
-      "performance_analysis": {{
-        "return_1y": "近1年收益",
-        "return_3y": "近3年收益",
-        "consistency": "业绩稳定性评价"
-      }},
-      "risk_factors": ["风险1", "风险2"],
-      "suitable_for": "适合投资者类型",
+      "investment_logic": "【核心价值】深入阐述投资价值，必须包含：1)长期业绩（近1年/3年收益率，同类排名百分位）；2)基金经理分析（从业年限、管理规模、历史业绩）；3)投资策略特点（持仓集中度、换手率、风格漂移情况）；4)适合场景（适合什么市场环境、什么类型投资者）。250字左右。",
+      "manager_analysis": "基金经理分析 - 从业XX年，管理规模XX亿，代表作XX",
+      "fund_style": "基金风格（成长/价值/均衡）- 需说明判断依据",
+      "risk_factors": ["具体风险1", "具体风险2"],
+      "suitable_for": "适合投资者类型及场景",
+      "why_now": "为什么当前是配置时机",
       "confidence": "高/中/低"
     }}
   ],
-  "macro_view": "宏观经济判断（100字内）",
-  "sector_preference": ["看好行业1", "看好行业2", "看好行业3"],
+  "macro_view": "宏观经济判断（150字内，需引用具体经济数据如GDP、CPI、利率等）",
+  "sector_preference": ["看好行业1（需说明原因）", "看好行业2", "看好行业3"],
   "investment_theme": ["投资主题1", "投资主题2"],
-  "risk_warning": "整体风险提示",
+  "risk_warning": "整体风险提示（具体说明当前市场的系统性风险）",
   "generated_at": "{report_date}"
 }}
 ```
 
 ## 筛选标准
-- 股票推荐 **5-8只**，基金推荐 **3-5只**
+- 股票推荐 **{stock_recommendation_count}只**，基金推荐 **{fund_recommendation_count}只**
 - 推荐评分需 >= 75分
+- **重要：investment_logic必须有具体数据支撑，包括估值数据、业绩数据、行业数据等**
 - 优先推荐：
   - 行业龙头或细分领域冠军
   - 估值处于历史合理区间（PE/PB百分位<60%）
