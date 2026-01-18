@@ -700,8 +700,8 @@ class RecommendationEngine:
         """
         Enrich LLM recommendations with original candidate data.
 
-        LLM may not include all fields (change_pct, pe, market_cap, etc.),
-        so we merge them from the original candidate data.
+        IMPORTANT: Always use original data for numeric fields (price, change_pct, etc.)
+        since LLM may hallucinate incorrect values. Only keep LLM's text analysis fields.
         """
         # Create lookup maps for quick access
         stock_map = {s.get('code'): s for s in stocks}
@@ -714,26 +714,26 @@ class RecommendationEngine:
                 code = rec_stock.get('code')
                 if code and code in stock_map:
                     original = stock_map[code]
-                    # Merge missing fields from original data
-                    if 'change_pct' not in rec_stock or rec_stock['change_pct'] is None:
-                        rec_stock['change_pct'] = original.get('change_pct')
-                    if 'pe' not in rec_stock or rec_stock['pe'] is None:
-                        rec_stock['pe'] = original.get('pe')
-                    if 'pb' not in rec_stock or rec_stock['pb'] is None:
-                        rec_stock['pb'] = original.get('pb')
-                    if 'market_cap' not in rec_stock or rec_stock['market_cap'] is None:
-                        rec_stock['market_cap'] = original.get('market_cap')
-                    if 'price' not in rec_stock or rec_stock['price'] is None:
-                        rec_stock['price'] = original.get('price')
+                    # ALWAYS use original data for numeric fields (LLM may hallucinate)
+                    rec_stock['price'] = original.get('price')
+                    rec_stock['current_price'] = original.get('price')
+                    rec_stock['change_pct'] = original.get('change_pct')
+                    rec_stock['pe'] = original.get('pe')
+                    rec_stock['pb'] = original.get('pb')
+                    rec_stock['market_cap'] = original.get('market_cap')
+                    rec_stock['turnover'] = original.get('turnover')
+
+                    # Use original score if not provided by LLM
                     if 'score' not in rec_stock or rec_stock['score'] is None:
                         rec_stock['score'] = original.get('score')
+                    if 'recommendation_score' not in rec_stock or rec_stock['recommendation_score'] is None:
+                        rec_stock['recommendation_score'] = rec_stock.get('score') or original.get('score')
 
-                    # Short-term specific fields
+                    # Short-term specific fields - ALWAYS use original
                     if is_short_term:
-                        if 'main_net_inflow' not in rec_stock or rec_stock['main_net_inflow'] is None:
-                            rec_stock['main_net_inflow'] = original.get('main_net_inflow')
-                        if 'volume_ratio' not in rec_stock or rec_stock['volume_ratio'] is None:
-                            rec_stock['volume_ratio'] = original.get('volume_ratio')
+                        rec_stock['main_net_inflow'] = original.get('main_net_inflow')
+                        rec_stock['volume_ratio'] = original.get('volume_ratio')
+                        rec_stock['main_net_inflow_pct'] = original.get('main_net_inflow_pct')
 
         # Enrich funds
         fund_key = "short_term_funds" if is_short_term else "long_term_funds"
@@ -742,19 +742,23 @@ class RecommendationEngine:
                 code = rec_fund.get('code')
                 if code and code in fund_map:
                     original = fund_map[code]
-                    # Merge missing fields from original data
-                    if 'fund_type' not in rec_fund or not rec_fund['fund_type']:
+                    # ALWAYS use original data for numeric fields
+                    rec_fund['current_nav'] = original.get('current_nav') or original.get('nav')
+                    rec_fund['nav'] = original.get('nav') or original.get('current_nav')
+                    rec_fund['return_1w'] = original.get('return_1w')
+                    rec_fund['return_1m'] = original.get('return_1m')
+                    rec_fund['return_3m'] = original.get('return_3m')
+                    rec_fund['return_6m'] = original.get('return_6m')
+                    rec_fund['return_1y'] = original.get('return_1y')
+                    rec_fund['return_3y'] = original.get('return_3y')
+
+                    # Use original type and score if not provided
+                    if not rec_fund.get('fund_type'):
                         rec_fund['fund_type'] = original.get('fund_type', '')
-                    if 'return_1w' not in rec_fund or rec_fund['return_1w'] is None:
-                        rec_fund['return_1w'] = original.get('return_1w')
-                    if 'return_1m' not in rec_fund or rec_fund['return_1m'] is None:
-                        rec_fund['return_1m'] = original.get('return_1m')
-                    if 'return_1y' not in rec_fund or rec_fund['return_1y'] is None:
-                        rec_fund['return_1y'] = original.get('return_1y')
-                    if 'return_3y' not in rec_fund or rec_fund['return_3y'] is None:
-                        rec_fund['return_3y'] = original.get('return_3y')
                     if 'score' not in rec_fund or rec_fund['score'] is None:
                         rec_fund['score'] = original.get('score')
+                    if 'recommendation_score' not in rec_fund or rec_fund['recommendation_score'] is None:
+                        rec_fund['recommendation_score'] = rec_fund.get('score') or original.get('score')
 
         return result
 

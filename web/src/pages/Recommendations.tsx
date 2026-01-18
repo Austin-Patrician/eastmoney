@@ -48,12 +48,14 @@ import {
     generateRecommendations,
     fetchLatestRecommendations,
     getUserPreferences,
+    pollRecommendationTask,
 
 } from '../api';
 
 import type {RecommendationResult,
     RecommendationStock,
-    RecommendationFund,} from '../api';
+    RecommendationFund,
+    TaskStatusResponse,} from '../api';
 
 import PreferencesModal from '../components/PreferencesModal';
 
@@ -109,18 +111,22 @@ const ConfidenceChip = ({ confidence }: { confidence?: string }) => {
     return <Chip label={c.label} size="small" className={`h-5 text-[10px] font-bold ${c.bg} ${c.text}`} />;
 };
 
-const formatMarketCap = (cap: number | null | undefined): string => {
-    if (!cap) return '-';
-    if (cap >= 1e12) return `${(cap / 1e12).toFixed(1)}万亿`;
-    if (cap >= 1e8) return `${(cap / 1e8).toFixed(0)}亿`;
-    return `${(cap / 1e4).toFixed(0)}万`;
+const formatMarketCap = (cap: number | string | null | undefined): string => {
+    if (cap === null || cap === undefined || cap === '') return '-';
+    const num = typeof cap === 'number' ? cap : parseFloat(String(cap));
+    if (isNaN(num)) return '-';
+    if (num >= 1e12) return `${(num / 1e12).toFixed(1)}万亿`;
+    if (num >= 1e8) return `${(num / 1e8).toFixed(0)}亿`;
+    return `${(num / 1e4).toFixed(0)}万`;
 };
 
-const formatAmount = (amount: number | null | undefined): string => {
-    if (!amount) return '-';
-    if (Math.abs(amount) >= 1e8) return `${(amount / 1e8).toFixed(2)}亿`;
-    if (Math.abs(amount) >= 1e4) return `${(amount / 1e4).toFixed(0)}万`;
-    return amount.toFixed(0);
+const formatAmount = (amount: number | string | null | undefined): string => {
+    if (amount === null || amount === undefined || amount === '') return '-';
+    const num = typeof amount === 'number' ? amount : parseFloat(String(amount));
+    if (isNaN(num)) return '-';
+    if (Math.abs(num) >= 1e8) return `${(num / 1e8).toFixed(2)}亿`;
+    if (Math.abs(num) >= 1e4) return `${(num / 1e4).toFixed(0)}万`;
+    return num.toFixed(0);
 };
 
 // --- Tab Preview Component ---
@@ -1208,6 +1214,7 @@ export default function RecommendationsPage() {
     const [data, setData] = useState<RecommendationResult | null>(null);
     const [loading, setLoading] = useState(true);
     const [generating, setGenerating] = useState(false);
+    const [generatingProgress, setGeneratingProgress] = useState<string>('');
     const [mode, setMode] = useState<'all' | 'short' | 'long'>('all');
     const [preferencesOpen, setPreferencesOpen] = useState(false);
     const [hasPreferences, setHasPreferences] = useState(false);
@@ -1243,17 +1250,39 @@ export default function RecommendationsPage() {
     const handleGenerate = async (forceRefresh: boolean = false) => {
         try {
             setGenerating(true);
+            setGeneratingProgress(t('recommendations.messages.generate_started'));
             setSnackbar({ open: true, message: t('recommendations.messages.generate_started'), severity: 'success' });
 
-            const result = await generateRecommendations({ mode, force_refresh: forceRefresh });
-            setData(result);
+            const response = await generateRecommendations({ mode, force_refresh: forceRefresh });
 
-            setSnackbar({ open: true, message: t('recommendations.messages.generate_success'), severity: 'success' });
+            // If cached result returned immediately
+            if (response.status === 'completed' && response.result) {
+                setData(response.result);
+                setSnackbar({ open: true, message: t('recommendations.messages.generate_success'), severity: 'success' });
+                setGenerating(false);
+                setGeneratingProgress('');
+                return;
+            }
+
+            // If task started in background, poll for completion
+            if (response.status === 'started' && response.task_id) {
+                const result = await pollRecommendationTask(
+                    response.task_id,
+                    (status: TaskStatusResponse) => {
+                        setGeneratingProgress(status.progress || '');
+                    },
+                    5000,  // Poll every 5 seconds
+                    200    // Max 200 attempts (~10 minutes)
+                );
+                setData(result);
+                setSnackbar({ open: true, message: t('recommendations.messages.generate_success'), severity: 'success' });
+            }
         } catch (error) {
             console.error('Failed to generate recommendations', error);
             setSnackbar({ open: true, message: t('recommendations.messages.generate_error'), severity: 'error' });
         } finally {
             setGenerating(false);
+            setGeneratingProgress('');
         }
     };
 
@@ -1338,7 +1367,7 @@ export default function RecommendationsPage() {
                         disabled={generating}
                         className="bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-md hover:shadow-lg"
                     >
-                        {generating ? t('recommendations.generating') : t('recommendations.generate')}
+                        {generating ? (generatingProgress || t('recommendations.generating')) : t('recommendations.generate')}
                     </Button>
 
                     {/* Force Refresh */}

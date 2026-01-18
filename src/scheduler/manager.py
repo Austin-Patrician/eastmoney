@@ -205,11 +205,6 @@ class SchedulerManager:
 
     def add_stock_jobs(self, stock: Dict):
         """Add Pre/Post market jobs for a single stock"""
-        # Check if today is a trading day
-        if not trading_calendar.is_trading_day():
-            print(f"Skipping STOCK  - not a trading day")
-            return
-
         code = stock['code']
         user_id = stock.get('user_id')
 
@@ -254,6 +249,11 @@ class SchedulerManager:
 
     def run_stock_analysis_task(self, stock_code: str, mode: str, user_id: Optional[int] = None):
         """Worker function for stock analysis"""
+        # Check if today is a trading day
+        if not trading_calendar.is_trading_day():
+            print(f"Skipping STOCK {mode.upper()}-market task for {stock_code} - not a trading day")
+            return
+
         print(f"Executing STOCK {mode.upper()}-market task for {stock_code} (User: {user_id})...")
 
         stock = get_stock_by_code(stock_code, user_id=user_id)

@@ -232,11 +232,15 @@ class ShortTermStockScreener(BaseScreener):
                 # ===== 严格筛选条件 =====
 
                 # 2. 市值过滤（用户偏好优先，否则用默认 100亿）
-                min_cap = user_min_market_cap or 1e10
-                if market_cap and market_cap < min_cap:
+                # 必须有有效市值数据
+                if not market_cap or market_cap <= 0:
                     filter_stats['market_cap'] += 1
                     continue
-                if user_max_market_cap and market_cap and market_cap > user_max_market_cap:
+                min_cap = user_min_market_cap or 1e10
+                if market_cap < min_cap:
+                    filter_stats['market_cap'] += 1
+                    continue
+                if user_max_market_cap and market_cap > user_max_market_cap:
                     filter_stats['market_cap'] += 1
                     continue
 
@@ -503,11 +507,15 @@ class LongTermStockScreener(BaseScreener):
                         continue
 
                 # 2. 市值过滤（用户偏好优先，否则用默认 200亿）
-                min_cap = user_min_market_cap or 2e10
-                if market_cap and market_cap < min_cap:
+                # 长期投资必须有有效市值数据
+                if not market_cap or market_cap <= 0:
                     filter_stats['market_cap'] += 1
                     continue
-                if user_max_market_cap and market_cap and market_cap > user_max_market_cap:
+                min_cap = user_min_market_cap or 2e10
+                if market_cap < min_cap:
+                    filter_stats['market_cap'] += 1
+                    continue
+                if user_max_market_cap and market_cap > user_max_market_cap:
                     filter_stats['market_cap'] += 1
                     continue
 

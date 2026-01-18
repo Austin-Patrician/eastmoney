@@ -942,8 +942,10 @@ def _enrich_stock_info(stock_dict):
     return stock_dict
 
 from concurrent.futures import ThreadPoolExecutor
+import uuid
 
-# ... (Previous code)
+# Global thread pool for background tasks
+_recommendation_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="recommend_")
 
 @app.get("/api/stocks", response_model=List[StockItem])
 async def get_stocks_endpoint(current_user: User = Depends(get_current_user)):
@@ -1235,19 +1237,111 @@ class RecommendationResponse(BaseModel):
     metadata: Dict[str, Any]
 
 
+def _run_recommendation_task(task_id: str, mode: str, user_id: int, user_preferences: Optional[Dict] = None):
+    """
+    Background task worker for generating recommendations.
+    Stores progress and results in cache.
+    """
+    from src.cache import cache_manager
+
+    cache_key = f"recommend_task:{task_id}"
+
+    try:
+        # Update status to running
+        cache_manager.set(cache_key, {
+            "status": "running",
+            "progress": "Initializing recommendation engine...",
+            "started_at": datetime.now().isoformat(),
+            "user_id": user_id,
+            "mode": mode
+        }, ttl=3600)  # 1 hour TTL
+
+        from src.analysis.recommendation import RecommendationEngine
+        from src.llm.client import get_llm_client
+        from src.data_sources.web_search import WebSearch
+
+        # Update progress
+        cache_manager.set(cache_key, {
+            "status": "running",
+            "progress": "Screening stocks and funds...",
+            "started_at": datetime.now().isoformat(),
+            "user_id": user_id,
+            "mode": mode
+        }, ttl=3600)
+
+        llm_client = get_llm_client()
+        web_search = WebSearch()
+        engine = RecommendationEngine(
+            llm_client=llm_client,
+            web_search=web_search,
+            cache_manager=cache_manager
+        )
+
+        # Generate recommendations
+        results = engine.generate_recommendations(
+            mode=mode,
+            use_llm=True,
+            user_preferences=user_preferences
+        )
+
+        # Sanitize results
+        results = sanitize_for_json(results)
+
+        # Cache the recommendation results
+        prefs_hash = "personalized" if user_preferences else "default"
+        result_cache_key = f"recommendations:{user_id}:{mode}:{prefs_hash}"
+        cache_manager.set(result_cache_key, results, ttl=14400)  # 4 hours
+
+        # Save to database
+        from src.storage.db import save_recommendation_report
+        save_recommendation_report({
+            "mode": mode,
+            "recommendations_json": results,
+            "market_context": results.get("metadata", {})
+        }, user_id=user_id)
+
+        # Update task status to completed
+        cache_manager.set(cache_key, {
+            "status": "completed",
+            "progress": "Recommendations generated successfully!",
+            "started_at": datetime.now().isoformat(),
+            "completed_at": datetime.now().isoformat(),
+            "user_id": user_id,
+            "mode": mode,
+            "result": results
+        }, ttl=3600)
+
+        print(f"[Task {task_id}] Recommendation generation completed for user {user_id}")
+
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        traceback.print_exc()
+
+        # Update task status to failed
+        cache_manager.set(cache_key, {
+            "status": "failed",
+            "progress": f"Error: {error_msg}",
+            "error": error_msg,
+            "user_id": user_id,
+            "mode": mode
+        }, ttl=3600)
+
+        print(f"[Task {task_id}] Recommendation generation failed: {error_msg}")
+
+
 @app.post("/api/recommend/generate")
 async def generate_recommendations_endpoint(
     request: RecommendationRequest = None,
     current_user: User = Depends(get_current_user)
 ):
     """
-    Generate AI investment recommendations.
+    Generate AI investment recommendations (runs in background).
 
     - mode: "short" (7+ days), "long" (3+ months), or "all"
     - force_refresh: Force regenerate even if cached
 
-    If user has configured investment preferences, recommendations will be
-    personalized based on those preferences (risk level, sector preferences, etc.)
+    Returns a task_id immediately. Use GET /api/recommend/task/{task_id} to poll status.
     """
     mode = request.mode if request else "all"
     force_refresh = request.force_refresh if request else False
@@ -1256,9 +1350,6 @@ async def generate_recommendations_endpoint(
         raise HTTPException(status_code=400, detail="Invalid mode. Use 'short', 'long', or 'all'.")
 
     try:
-        from src.analysis.recommendation import RecommendationEngine
-        from src.llm.client import get_llm_client
-        from src.data_sources.web_search import WebSearch
         from src.cache import cache_manager
         from src.storage.db import get_user_preferences
 
@@ -1269,62 +1360,102 @@ async def generate_recommendations_endpoint(
             if prefs_data and prefs_data.get('preferences'):
                 user_preferences = prefs_data.get('preferences')
                 print(f"Loaded personalized preferences for user {current_user.id}")
-                print(f"  - Risk level: {user_preferences.get('risk_level')}")
-                print(f"  - Preferred sectors: {user_preferences.get('preferred_sectors')}")
-                print(f"  - Excluded sectors: {user_preferences.get('excluded_sectors')}")
-                print(f"  - Preferred fund types: {user_preferences.get('preferred_fund_types')}")
         except Exception as e:
             print(f"No user preferences found: {e}")
 
         # Check cache first (unless force refresh)
-        # Include preferences hash in cache key for personalized results
         prefs_hash = "personalized" if user_preferences else "default"
         if not force_refresh:
             cache_key = f"recommendations:{current_user.id}:{mode}:{prefs_hash}"
             cached = cache_manager.get(cache_key)
             if cached:
                 print(f"Returning cached recommendations for user {current_user.id}")
-                return sanitize_for_json(cached)
+                return {
+                    "status": "completed",
+                    "cached": True,
+                    "result": sanitize_for_json(cached)
+                }
 
-        print(f"Generating {mode} recommendations for user {current_user.id} (personalized: {user_preferences is not None})...")
+        # Generate unique task ID
+        task_id = str(uuid.uuid4())
 
-        # Initialize engine
-        llm_client = get_llm_client()
-        web_search = WebSearch()
-        engine = RecommendationEngine(
-            llm_client=llm_client,
-            web_search=web_search,
-            cache_manager=cache_manager
+        # Initialize task status
+        cache_manager.set(f"recommend_task:{task_id}", {
+            "status": "pending",
+            "progress": "Task queued...",
+            "user_id": current_user.id,
+            "mode": mode
+        }, ttl=3600)
+
+        # Submit to background executor
+        _recommendation_executor.submit(
+            _run_recommendation_task,
+            task_id,
+            mode,
+            current_user.id,
+            user_preferences
         )
 
-        # Generate recommendations (run in thread to avoid blocking)
-        results = await asyncio.to_thread(
-            engine.generate_recommendations,
-            mode=mode,
-            use_llm=True,
-            user_preferences=user_preferences
-        )
+        print(f"Started recommendation task {task_id} for user {current_user.id}")
 
-        # Sanitize results to ensure JSON-serializable
-        results = sanitize_for_json(results)
-
-        # Cache results (4 hours)
-        cache_key = f"recommendations:{current_user.id}:{mode}:{prefs_hash}"
-        cache_manager.set(cache_key, results, ttl=14400)
-
-        # Save to database
-        from src.storage.db import save_recommendation_report
-        save_recommendation_report({
-            "mode": mode,
-            "recommendations_json": results,
-            "market_context": results.get("metadata", {})
-        }, user_id=current_user.id)
-
-        return results
+        return {
+            "status": "started",
+            "task_id": task_id,
+            "message": "Recommendation generation started. Poll /api/recommend/task/{task_id} for status."
+        }
 
     except Exception as e:
         import traceback
         traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/recommend/task/{task_id}")
+async def get_recommendation_task_status(
+    task_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get the status of a recommendation generation task.
+
+    Returns:
+    - status: "pending", "running", "completed", or "failed"
+    - progress: Human-readable progress message
+    - result: Full recommendation data (only when status is "completed")
+    """
+    try:
+        from src.cache import cache_manager
+
+        cache_key = f"recommend_task:{task_id}"
+        task_data = cache_manager.get(cache_key)
+
+        if not task_data:
+            raise HTTPException(status_code=404, detail="Task not found or expired")
+
+        # Security check: ensure task belongs to current user
+        if task_data.get("user_id") != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # Return task status
+        response = {
+            "task_id": task_id,
+            "status": task_data.get("status"),
+            "progress": task_data.get("progress"),
+            "mode": task_data.get("mode")
+        }
+
+        if task_data.get("status") == "completed":
+            response["result"] = task_data.get("result")
+            response["completed_at"] = task_data.get("completed_at")
+
+        if task_data.get("status") == "failed":
+            response["error"] = task_data.get("error")
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 

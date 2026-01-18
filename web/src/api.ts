@@ -396,9 +396,67 @@ export interface RecommendationRequest {
     force_refresh?: boolean;
 }
 
-export const generateRecommendations = async (request: RecommendationRequest): Promise<RecommendationResult> => {
+// Task-based response for background generation
+export interface RecommendationTaskResponse {
+    status: 'started' | 'completed';
+    task_id?: string;
+    message?: string;
+    cached?: boolean;
+    result?: RecommendationResult;
+}
+
+export interface TaskStatusResponse {
+    task_id: string;
+    status: 'pending' | 'running' | 'completed' | 'failed';
+    progress: string;
+    mode: string;
+    result?: RecommendationResult;
+    completed_at?: string;
+    error?: string;
+}
+
+// Start recommendation generation (returns immediately with task_id)
+export const generateRecommendations = async (request: RecommendationRequest): Promise<RecommendationTaskResponse> => {
     const response = await api.post('/recommend/generate', request);
     return response.data;
+};
+
+// Poll task status
+export const getRecommendationTaskStatus = async (taskId: string): Promise<TaskStatusResponse> => {
+    const response = await api.get(`/recommend/task/${taskId}`);
+    return response.data;
+};
+
+// Helper: Poll until task completes (with callback for progress updates)
+export const pollRecommendationTask = async (
+    taskId: string,
+    onProgress?: (status: TaskStatusResponse) => void,
+    intervalMs: number = 5000,
+    maxAttempts: number = 200  // ~10 minutes max
+): Promise<RecommendationResult> => {
+    let attempts = 0;
+
+    while (attempts < maxAttempts) {
+        const status = await getRecommendationTaskStatus(taskId);
+
+        if (onProgress) {
+            onProgress(status);
+        }
+
+        if (status.status === 'completed' && status.result) {
+            return status.result;
+        }
+
+        if (status.status === 'failed') {
+            throw new Error(status.error || 'Task failed');
+        }
+
+        // Wait before next poll
+        await new Promise(resolve => setTimeout(resolve, intervalMs));
+        attempts++;
+    }
+
+    throw new Error('Task timed out');
 };
 
 export const fetchLatestRecommendations = async (): Promise<{
