@@ -29,7 +29,7 @@ const routes = [
       {
         path: 'funds',
         name: 'Funds',
-        component: () => import('../views/funds/index.vue'),
+        component: () => import('../views/Funds.vue'),
       },
       {
         path: 'stocks',

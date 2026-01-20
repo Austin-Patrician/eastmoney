@@ -7,6 +7,7 @@ import './models/index.js' // 初始化数据库
 import authRoutes from './routes/auth.js'
 import settingsRoutes from './routes/settings.js'
 import aiRoutes from './routes/ai.js'
+import fundRoutes from './routes/funds.js'
 
 const app = express()
 
@@ -44,6 +45,9 @@ app.use('/api/settings', settingsRoutes)
 
 // AI 路由
 app.use('/api/ai', aiRoutes)
+
+// 基金路由
+app.use('/api/funds', fundRoutes)
 
 // 404 处理
 app.use((req, res) => {
