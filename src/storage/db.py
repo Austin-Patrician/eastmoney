@@ -195,6 +195,55 @@ def init_db():
     c.execute('CREATE INDEX IF NOT EXISTS idx_stock_basic_name ON stock_basic(name)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_stock_basic_industry ON stock_basic(industry)')
 
+    # 13. Create Fund Positions Table (user holdings)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS fund_positions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            fund_code TEXT NOT NULL,
+            fund_name TEXT,
+            shares REAL NOT NULL,
+            cost_basis REAL NOT NULL,
+            purchase_date DATE NOT NULL,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, fund_code, purchase_date)
+        )
+    ''')
+
+    # Create indexes for fund_positions
+    c.execute('CREATE INDEX IF NOT EXISTS idx_fund_positions_user ON fund_positions(user_id)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_fund_positions_code ON fund_positions(fund_code)')
+
+    # 14. Create Fund Diagnosis Cache Table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS fund_diagnosis_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fund_code TEXT NOT NULL UNIQUE,
+            diagnosis_json TEXT NOT NULL,
+            score INTEGER,
+            computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP
+        )
+    ''')
+
+    # 15. Create Index Valuation Cache Table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS index_valuation_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            index_code TEXT NOT NULL,
+            pe REAL,
+            pb REAL,
+            pe_percentile REAL,
+            pb_percentile REAL,
+            signal TEXT CHECK(signal IN ('green', 'yellow', 'red')),
+            trade_date TEXT,
+            computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(index_code, trade_date)
+        )
+    ''')
+
     # 3. Migration: Add user_id to funds if not exists
     try:
         c.execute('ALTER TABLE funds ADD COLUMN user_id INTEGER REFERENCES users(id)')
@@ -1318,3 +1367,281 @@ def get_stock_basic_last_updated() -> Optional[str]:
     row = conn.execute('SELECT MAX(updated_at) FROM stock_basic').fetchone()
     conn.close()
     return row[0] if row and row[0] else None
+
+
+# --- Fund Position Operations ---
+
+def get_user_positions(user_id: int) -> List[Dict]:
+    """Get all fund positions for a user."""
+    if not user_id:
+        return []
+    conn = get_db_connection()
+    rows = conn.execute(
+        '''SELECT * FROM fund_positions WHERE user_id = ? ORDER BY purchase_date DESC''',
+        (user_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_position_by_id(position_id: int, user_id: int) -> Optional[Dict]:
+    """Get a specific position by ID."""
+    conn = get_db_connection()
+    row = conn.execute(
+        'SELECT * FROM fund_positions WHERE id = ? AND user_id = ?',
+        (position_id, user_id)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_positions_by_fund(fund_code: str, user_id: int) -> List[Dict]:
+    """Get all positions for a specific fund."""
+    conn = get_db_connection()
+    rows = conn.execute(
+        '''SELECT * FROM fund_positions WHERE fund_code = ? AND user_id = ? ORDER BY purchase_date DESC''',
+        (fund_code, user_id)
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def create_position(position_data: Dict, user_id: int) -> int:
+    """Create a new fund position."""
+    if not user_id:
+        raise ValueError("user_id is required")
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    try:
+        c.execute('''
+            INSERT INTO fund_positions (user_id, fund_code, fund_name, shares, cost_basis, purchase_date, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            user_id,
+            position_data['fund_code'],
+            position_data.get('fund_name', ''),
+            position_data['shares'],
+            position_data['cost_basis'],
+            position_data['purchase_date'],
+            position_data.get('notes', ''),
+        ))
+        position_id = c.lastrowid
+        conn.commit()
+        return position_id
+    except sqlite3.IntegrityError as e:
+        conn.close()
+        raise ValueError(f"Position already exists or constraint violation: {e}")
+    finally:
+        conn.close()
+
+
+def update_position(position_id: int, user_id: int, updates: Dict) -> bool:
+    """Update an existing position."""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Verify ownership
+    exists = c.execute(
+        'SELECT id FROM fund_positions WHERE id = ? AND user_id = ?',
+        (position_id, user_id)
+    ).fetchone()
+
+    if not exists:
+        conn.close()
+        return False
+
+    set_clauses = []
+    params = []
+
+    allowed_fields = ['fund_name', 'shares', 'cost_basis', 'purchase_date', 'notes']
+    for field in allowed_fields:
+        if field in updates:
+            set_clauses.append(f'{field} = ?')
+            params.append(updates[field])
+
+    if set_clauses:
+        set_clauses.append('updated_at = CURRENT_TIMESTAMP')
+        params.extend([position_id, user_id])
+
+        sql = f"UPDATE fund_positions SET {', '.join(set_clauses)} WHERE id = ? AND user_id = ?"
+        c.execute(sql, tuple(params))
+
+    conn.commit()
+    conn.close()
+    return True
+
+
+def delete_position(position_id: int, user_id: int) -> bool:
+    """Delete a position."""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Verify ownership
+    exists = c.execute(
+        'SELECT id FROM fund_positions WHERE id = ? AND user_id = ?',
+        (position_id, user_id)
+    ).fetchone()
+
+    if not exists:
+        conn.close()
+        return False
+
+    c.execute('DELETE FROM fund_positions WHERE id = ? AND user_id = ?', (position_id, user_id))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def get_portfolio_summary(user_id: int) -> Dict:
+    """Get aggregated portfolio summary for a user."""
+    conn = get_db_connection()
+    rows = conn.execute(
+        '''SELECT fund_code, fund_name, SUM(shares) as total_shares,
+           SUM(shares * cost_basis) / SUM(shares) as avg_cost,
+           SUM(shares * cost_basis) as total_cost
+           FROM fund_positions
+           WHERE user_id = ?
+           GROUP BY fund_code''',
+        (user_id,)
+    ).fetchall()
+    conn.close()
+
+    positions = []
+    total_cost = 0
+    for row in rows:
+        d = dict(row)
+        total_cost += d['total_cost'] or 0
+        positions.append({
+            'fund_code': d['fund_code'],
+            'fund_name': d['fund_name'],
+            'total_shares': round(d['total_shares'], 4) if d['total_shares'] else 0,
+            'avg_cost': round(d['avg_cost'], 4) if d['avg_cost'] else 0,
+            'total_cost': round(d['total_cost'], 2) if d['total_cost'] else 0,
+        })
+
+    return {
+        'positions': positions,
+        'total_cost': round(total_cost, 2),
+        'position_count': len(positions),
+    }
+
+
+# --- Fund Diagnosis Cache Operations ---
+
+def get_diagnosis_cache(fund_code: str) -> Optional[Dict]:
+    """Get cached diagnosis for a fund if not expired."""
+    conn = get_db_connection()
+    row = conn.execute(
+        '''SELECT * FROM fund_diagnosis_cache
+           WHERE fund_code = ? AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)''',
+        (fund_code,)
+    ).fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    result = dict(row)
+    if result.get('diagnosis_json'):
+        try:
+            result['diagnosis'] = json.loads(result['diagnosis_json'])
+        except:
+            result['diagnosis'] = {}
+    return result
+
+
+def save_diagnosis_cache(fund_code: str, diagnosis: Dict, score: int, ttl_hours: int = 6):
+    """Save diagnosis to cache with TTL."""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    diagnosis_json = json.dumps(diagnosis, ensure_ascii=False)
+
+    c.execute('''
+        INSERT OR REPLACE INTO fund_diagnosis_cache
+        (fund_code, diagnosis_json, score, computed_at, expires_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP, datetime('now', '+' || ? || ' hours'))
+    ''', (fund_code, diagnosis_json, score, ttl_hours))
+
+    conn.commit()
+    conn.close()
+
+
+def clear_diagnosis_cache(fund_code: str = None):
+    """Clear diagnosis cache (all or specific fund)."""
+    conn = get_db_connection()
+    if fund_code:
+        conn.execute('DELETE FROM fund_diagnosis_cache WHERE fund_code = ?', (fund_code,))
+    else:
+        conn.execute('DELETE FROM fund_diagnosis_cache')
+    conn.commit()
+    conn.close()
+
+
+def clear_expired_diagnosis_cache():
+    """Remove expired diagnosis cache entries."""
+    conn = get_db_connection()
+    conn.execute('DELETE FROM fund_diagnosis_cache WHERE expires_at < CURRENT_TIMESTAMP')
+    conn.commit()
+    conn.close()
+
+
+# --- Index Valuation Cache Operations ---
+
+def get_valuation_cache(index_code: str, trade_date: str = None) -> Optional[Dict]:
+    """Get cached valuation for an index."""
+    conn = get_db_connection()
+
+    if trade_date:
+        row = conn.execute(
+            'SELECT * FROM index_valuation_cache WHERE index_code = ? AND trade_date = ?',
+            (index_code, trade_date)
+        ).fetchone()
+    else:
+        # Get latest
+        row = conn.execute(
+            'SELECT * FROM index_valuation_cache WHERE index_code = ? ORDER BY trade_date DESC LIMIT 1',
+            (index_code,)
+        ).fetchone()
+
+    conn.close()
+    return dict(row) if row else None
+
+
+def save_valuation_cache(valuation_data: Dict):
+    """Save index valuation to cache."""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    c.execute('''
+        INSERT OR REPLACE INTO index_valuation_cache
+        (index_code, pe, pb, pe_percentile, pb_percentile, signal, trade_date, computed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ''', (
+        valuation_data['index_code'],
+        valuation_data.get('pe'),
+        valuation_data.get('pb'),
+        valuation_data.get('pe_percentile'),
+        valuation_data.get('pb_percentile'),
+        valuation_data.get('signal'),
+        valuation_data.get('trade_date'),
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def get_valuation_history(index_code: str, limit: int = 30) -> List[Dict]:
+    """Get valuation history for an index."""
+    conn = get_db_connection()
+    rows = conn.execute(
+        '''SELECT * FROM index_valuation_cache
+           WHERE index_code = ?
+           ORDER BY trade_date DESC
+           LIMIT ?''',
+        (index_code, limit)
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]

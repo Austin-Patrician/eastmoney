@@ -5,6 +5,7 @@ import Layout from './components/layout/Layout';
 import DashboardPage from './pages/Dashboard';
 import ReportsPage from './pages/Reports';
 import FundsPage from './pages/Funds';
+import PortfolioPage from './pages/Portfolio';
 import StocksPage from './pages/Stocks';
 import SentimentPage from './pages/Sentiment';
 import CommoditiesPage from './pages/Commodities';
@@ -47,6 +48,7 @@ function App() {
                 <Route index element={<Navigate to="/dashboard" replace />} />
                 <Route path="dashboard" element={<DashboardPage />} />
                 <Route path="funds" element={<FundsPage />} />
+                <Route path="portfolio" element={<PortfolioPage />} />
                 <Route path="stocks" element={<StocksPage />} />
                 <Route path="recommendations" element={<RecommendationsPage />} />
                 <Route path="news" element={<NewsPage />} />

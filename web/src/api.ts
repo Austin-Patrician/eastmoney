@@ -1293,3 +1293,329 @@ export const fetchQuantAIInterpretation = async (code: string): Promise<QuantInt
     const response = await api.get(`/stocks/${code}/quant/ai-interpret`);
     return response.data;
 };
+
+
+// ====================================================================
+// Fund Analysis API - Diagnosis, Risk Metrics, Comparison
+// ====================================================================
+
+// --- Fund Diagnosis ---
+
+export interface FundDiagnosisDimension {
+    name: string;
+    name_en: string;
+    score: number;
+    max: number;
+}
+
+export interface FundAnalysisSummary {
+    strengths: string[];
+    weaknesses: string[];
+    recommendation: string;
+}
+
+export interface FundDiagnosisResponse {
+    fund_code: string;
+    score: number;
+    grade: string;
+    dimensions: FundDiagnosisDimension[];
+    radar_data: number[];
+    analysis_summary: FundAnalysisSummary;
+    computed_at: string;
+    error?: string;
+}
+
+export const fetchFundDiagnosis = async (code: string, forceRefresh = false): Promise<FundDiagnosisResponse> => {
+    const response = await api.get(`/funds/${code}/diagnosis`, {
+        params: { force_refresh: forceRefresh }
+    });
+    return response.data;
+};
+
+
+// --- Fund Risk Metrics ---
+
+export interface RiskMetricValue {
+    value: number | null;
+    rating?: string;
+    description?: string;
+    error?: string;
+}
+
+export interface MaxDrawdownValue extends RiskMetricValue {
+    peak_date?: string;
+    trough_date?: string;
+    recovery_date?: string | null;
+    recovery_days?: number | null;
+}
+
+export interface FundRiskMetricsResponse {
+    sharpe_ratio: RiskMetricValue;
+    max_drawdown: MaxDrawdownValue;
+    annual_volatility: RiskMetricValue;
+    calmar_ratio: number | null;
+    sortino_ratio: RiskMetricValue;
+    annual_return: RiskMetricValue;
+    total_return: RiskMetricValue;
+    var_95: RiskMetricValue;
+    var_99: RiskMetricValue;
+    win_rate: RiskMetricValue;
+    period?: {
+        start_date: string;
+        end_date: string;
+        trading_days: number;
+    };
+    computed_at: string;
+    error?: string;
+}
+
+export const fetchFundRiskMetrics = async (code: string): Promise<FundRiskMetricsResponse> => {
+    const response = await api.get(`/funds/${code}/risk-metrics`);
+    return response.data;
+};
+
+
+// --- Fund Drawdown History ---
+
+export interface DrawdownPeriod {
+    start_date: string;
+    trough_date: string;
+    recovery_date: string | null;
+    drawdown: number;
+    duration: number;
+    recovery_days: number | null;
+    total_days?: number;
+    is_ongoing?: boolean;
+}
+
+export interface DrawdownSeriesPoint {
+    date: string;
+    drawdown: number;
+    value: number;
+}
+
+export interface FundDrawdownResponse {
+    current_drawdown: number;
+    is_in_drawdown: boolean;
+    max_drawdown: {
+        value: number;
+        period: DrawdownPeriod | null;
+    };
+    periods: DrawdownPeriod[];
+    statistics: {
+        total_periods: number;
+        avg_drawdown: number;
+        avg_duration_days: number;
+        avg_recovery_days: number | null;
+    };
+    drawdown_series: DrawdownSeriesPoint[];
+    computed_at: string;
+    error?: string;
+}
+
+export const fetchFundDrawdownHistory = async (code: string, threshold = 0.05): Promise<FundDrawdownResponse> => {
+    const response = await api.get(`/funds/${code}/drawdown-history`, {
+        params: { threshold }
+    });
+    return response.data;
+};
+
+
+// --- Advanced Fund Comparison (up to 10 funds) ---
+
+export interface FundNavCurve {
+    name: string;
+    data: Array<{ date: string; value: number; original_value?: number }>;
+}
+
+export interface FundReturnComparison {
+    code: string;
+    name: string;
+    '1m'?: number;
+    '3m'?: number;
+    '6m'?: number;
+    '1y'?: number;
+    '3y'?: number;
+}
+
+export interface FundRiskComparison {
+    code: string;
+    name: string;
+    sharpe_ratio: number;
+    max_drawdown: number;
+    annual_volatility: number;
+    calmar_ratio: number;
+    annual_return: number;
+}
+
+export interface CommonStock {
+    code: string;
+    name: string;
+    held_by: string[];
+    count: number;
+}
+
+export interface FundRankingItem {
+    code: string;
+    name: string;
+    rank: number;
+    score: number;
+    components: {
+        return: number;
+        sharpe: number;
+        max_drawdown: number;
+    };
+}
+
+export interface FundComparisonResponse {
+    funds: Array<{ code: string; name: string }>;
+    nav_comparison: {
+        curves: Record<string, FundNavCurve>;
+        date_range: { start: string; end: string } | null;
+    };
+    return_comparison: {
+        returns: Record<string, FundReturnComparison>;
+        periods: string[];
+        rankings: Record<string, string[]>;
+    };
+    risk_comparison: {
+        metrics: Record<string, FundRiskComparison>;
+        rankings: Record<string, string[]>;
+    };
+    holdings_overlap: {
+        overlap_matrix: Record<string, Record<string, number>>;
+        common_stocks: CommonStock[];
+        total_unique_stocks?: number;
+        message?: string;
+    };
+    ranking: {
+        ranking: FundRankingItem[];
+        methodology: string;
+    };
+    computed_at: string;
+}
+
+export const compareFundsAdvanced = async (codes: string[]): Promise<FundComparisonResponse> => {
+    const response = await api.post('/funds/compare', { codes });
+    return response.data;
+};
+
+
+// ====================================================================
+// Portfolio Management API
+// ====================================================================
+
+export interface PortfolioPosition {
+    id: number;
+    fund_code: string;
+    fund_name?: string;
+    shares: number;
+    cost_basis: number;
+    purchase_date: string;
+    notes?: string;
+    current_nav?: number;
+    position_cost: number;
+    position_value: number;
+    pnl: number;
+    pnl_pct: number;
+    created_at?: string;
+    updated_at?: string;
+}
+
+export interface PortfolioAllocation {
+    fund_code: string;
+    fund_name?: string;
+    value: number;
+    weight: number;
+}
+
+export interface PortfolioSummaryResponse {
+    total_value: number;
+    total_cost: number;
+    total_pnl: number;
+    total_pnl_pct: number;
+    positions: Array<{
+        fund_code: string;
+        fund_name?: string;
+        shares: number;
+        cost_basis: number;
+        current_nav?: number;
+        position_cost: number;
+        position_value: number;
+        pnl: number;
+        pnl_pct: number;
+        purchase_date?: string;
+    }>;
+    allocation: PortfolioAllocation[];
+    position_count: number;
+    computed_at: string;
+}
+
+export interface ConcentrationWarning {
+    stock_code: string;
+    stock_name: string;
+    weight: number;
+    threshold: number;
+    message: string;
+}
+
+export interface AggregatedHolding {
+    stock_code: string;
+    stock_name: string;
+    total_weight: number;
+    fund_count: number;
+    fund_sources: Array<{
+        fund_code: string;
+        weight_in_fund: number;
+        effective_weight: number;
+    }>;
+}
+
+export interface PortfolioOverlapResponse {
+    aggregated_holdings: AggregatedHolding[];
+    total_unique_stocks: number;
+    concentration_warnings: ConcentrationWarning[];
+    overlap_matrix: Record<string, Record<string, number>>;
+    industry_breakdown?: Array<{ industry: string; weight: number }>;
+    computed_at: string;
+    message?: string;
+}
+
+export interface PositionCreateData {
+    fund_code: string;
+    fund_name?: string;
+    shares: number;
+    cost_basis: number;
+    purchase_date: string;
+    notes?: string;
+}
+
+export const fetchPortfolioPositions = async (): Promise<{ positions: PortfolioPosition[] }> => {
+    const response = await api.get('/portfolio/positions');
+    return response.data;
+};
+
+export const fetchPortfolioSummary = async (): Promise<PortfolioSummaryResponse> => {
+    const response = await api.get('/portfolio/summary');
+    return response.data;
+};
+
+export const fetchPortfolioOverlap = async (): Promise<PortfolioOverlapResponse> => {
+    const response = await api.get('/portfolio/overlap');
+    return response.data;
+};
+
+export const createPosition = async (data: PositionCreateData): Promise<{ id: number; message: string }> => {
+    const response = await api.post('/portfolio/positions', data);
+    return response.data;
+};
+
+export const updatePosition = async (positionId: number, data: Partial<PositionCreateData>): Promise<{ message: string }> => {
+    const response = await api.put(`/portfolio/positions/${positionId}`, data);
+    return response.data;
+};
+
+export const deletePosition = async (positionId: number): Promise<{ message: string }> => {
+    const response = await api.delete(`/portfolio/positions/${positionId}`);
+    return response.data;
+};

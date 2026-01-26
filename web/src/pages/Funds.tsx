@@ -29,7 +29,8 @@ import {
   ListItemIcon,
   ListItemText,
   Snackbar,
-  Alert
+  Alert,
+  Checkbox,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -42,6 +43,18 @@ import MoreVertIcon from '@mui/icons-material/MoreVert';
 import AnalyticsIcon from '@mui/icons-material/Analytics';
 import AssessmentIcon from '@mui/icons-material/Assessment';
 import EditIcon from '@mui/icons-material/Edit';
+import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
+import CloseIcon from '@mui/icons-material/Close';
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as RechartsTooltip,
+  Legend,
+  ResponsiveContainer,
+} from 'recharts';
 
 import {
   fetchFunds,
@@ -51,10 +64,16 @@ import {
   fetchFundMarketDetails,
   fetchFundNavHistory,
   generateReport,
+  compareFundsAdvanced,
 } from '../api';
 
-import type{MarketFund,FundItem,NavPoint}  from '../api';
+import type { MarketFund, FundItem, NavPoint, FundComparisonResponse } from '../api';
 import { useAppContext } from '../contexts/AppContext';
+
+const CHART_COLORS = [
+  '#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6',
+  '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1',
+];
 
 
 export default function FundsPage() {
@@ -97,8 +116,77 @@ export default function FundsPage() {
     severity: 'info'
   });
 
-  const showNotify = (message: string, severity: 'success' | 'info' | 'warning' | 'error' = 'info') => { 
+  const showNotify = (message: string, severity: 'success' | 'info' | 'warning' | 'error' = 'info') => {
     setNotify({ open: true, message, severity });
+  };
+
+  // Comparison Mode State
+  const [compareMode, setCompareMode] = useState(false);
+  const [selectedForCompare, setSelectedForCompare] = useState<Set<string>>(new Set());
+  const [comparisonData, setComparisonData] = useState<FundComparisonResponse | null>(null);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareTab, setCompareTab] = useState(0);
+
+  // Toggle fund selection for comparison
+  const handleToggleCompare = (code: string) => {
+    const newSet = new Set(selectedForCompare);
+    if (newSet.has(code)) {
+      newSet.delete(code);
+    } else if (newSet.size < 10) {
+      newSet.add(code);
+    } else {
+      showNotify(t('funds.compare.max_funds'), 'warning');
+      return;
+    }
+    setSelectedForCompare(newSet);
+  };
+
+  // Run comparison
+  const handleRunComparison = async () => {
+    if (selectedForCompare.size < 2) {
+      showNotify(t('funds.compare.min_funds'), 'warning');
+      return;
+    }
+    setCompareLoading(true);
+    try {
+      const codes = Array.from(selectedForCompare);
+      const result = await compareFundsAdvanced(codes);
+      setComparisonData(result);
+    } catch (err: any) {
+      showNotify(err.message || t('funds.compare.error'), 'error');
+    } finally {
+      setCompareLoading(false);
+    }
+  };
+
+  // Get NAV chart data for comparison
+  const getNavChartData = () => {
+    if (!comparisonData?.nav_comparison?.curves) return [];
+    const curves = comparisonData.nav_comparison.curves;
+    const fundCodes = Object.keys(curves);
+    if (fundCodes.length === 0) return [];
+
+    const dateSet = new Set<string>();
+    fundCodes.forEach((code) => {
+      curves[code].data.forEach((d: any) => dateSet.add(d.date));
+    });
+
+    const sortedDates = Array.from(dateSet).sort();
+    return sortedDates.map((date) => {
+      const point: any = { date };
+      fundCodes.forEach((code) => {
+        const entry = curves[code].data.find((d: any) => d.date === date);
+        point[code] = entry?.value || null;
+      });
+      return point;
+    });
+  };
+
+  // Clear comparison
+  const handleClearComparison = () => {
+    setCompareMode(false);
+    setSelectedForCompare(new Set());
+    setComparisonData(null);
   };
 
   const handleOpenMenu = (event: React.MouseEvent<HTMLElement>, fund: FundItem) => {
@@ -313,21 +401,76 @@ export default function FundsPage() {
             {t('funds.subtitle')}
           </Typography>
         </div>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => handleOpenDialog()}
-          sx={{
-            backgroundColor: '#6366f1',
-            borderRadius: '10px',
-            px: 3,
-            textTransform: 'none',
-            fontWeight: 600,
-            '&:hover': { backgroundColor: '#4f46e5' }
-          }}
-        >
-          {t('funds.add_target')}
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1.5 }}>
+          {compareMode ? (
+            <>
+              <Button
+                variant="outlined"
+                onClick={handleClearComparison}
+                startIcon={<CloseIcon />}
+                sx={{
+                  borderRadius: '10px',
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  borderColor: '#e2e8f0',
+                  color: '#64748b',
+                }}
+              >
+                {t('funds.compare.cancel')}
+              </Button>
+              <Button
+                variant="contained"
+                onClick={handleRunComparison}
+                disabled={selectedForCompare.size < 2 || compareLoading}
+                startIcon={compareLoading ? <CircularProgress size={16} color="inherit" /> : <CompareArrowsIcon />}
+                sx={{
+                  backgroundColor: '#22c55e',
+                  borderRadius: '10px',
+                  px: 3,
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  '&:hover': { backgroundColor: '#16a34a' },
+                  '&:disabled': { backgroundColor: '#94a3b8' },
+                }}
+              >
+                {t('funds.compare.compare_btn')} ({selectedForCompare.size}/10)
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                variant="outlined"
+                startIcon={<CompareArrowsIcon />}
+                onClick={() => setCompareMode(true)}
+                sx={{
+                  borderRadius: '10px',
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  borderColor: '#e2e8f0',
+                  color: '#64748b',
+                  '&:hover': { borderColor: '#6366f1', color: '#6366f1', bgcolor: 'rgba(99, 102, 241, 0.05)' },
+                }}
+              >
+                {t('funds.compare.title')}
+              </Button>
+              <Button
+                variant="contained"
+                startIcon={<AddIcon />}
+                onClick={() => handleOpenDialog()}
+                sx={{
+                  backgroundColor: '#6366f1',
+                  borderRadius: '10px',
+                  px: 3,
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  '&:hover': { backgroundColor: '#4f46e5' }
+                }}
+              >
+                {t('funds.add_target')}
+              </Button>
+            </>
+          )}
+        </Box>
       </div>
 
       {loading ? (
@@ -339,6 +482,23 @@ export default function FundsPage() {
           <Table sx={{ minWidth: 650 }}>
             <TableHead sx={{ bgcolor: '#f8fafc' }}>
               <TableRow>
+                {compareMode && (
+                  <TableCell padding="checkbox" sx={{ py: 2 }}>
+                    <Checkbox
+                      indeterminate={selectedForCompare.size > 0 && selectedForCompare.size < funds.length}
+                      checked={funds.length > 0 && selectedForCompare.size === funds.length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          const allCodes = new Set(funds.slice(0, 10).map(f => f.code));
+                          setSelectedForCompare(allCodes);
+                        } else {
+                          setSelectedForCompare(new Set());
+                        }
+                      }}
+                      sx={{ color: '#94a3b8' }}
+                    />
+                  </TableCell>
+                )}
                 <TableCell sx={{ color: '#64748b', fontWeight: 800, fontSize: '0.75rem', py: 2 }}>{t('funds.table.fund_entity')}</TableCell>
                 <TableCell sx={{ color: '#64748b', fontWeight: 800, fontSize: '0.75rem', py: 2 }}>{t('funds.table.strategy')}</TableCell>
                 <TableCell sx={{ color: '#64748b', fontWeight: 800, fontSize: '0.75rem', py: 2 }}>{t('funds.table.sectors')}</TableCell>
@@ -347,13 +507,30 @@ export default function FundsPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {funds.map((fund) => (
-                <TableRow 
-                  key={fund.code} 
-                  hover 
-                  onClick={() => handleViewDetails(fund)}
-                  sx={{ cursor: 'pointer', '&:last-child td, &:last-child th': { border: 0 } }}
+              {funds.map((fund, idx) => (
+                <TableRow
+                  key={fund.code}
+                  hover
+                  onClick={() => compareMode ? handleToggleCompare(fund.code) : handleViewDetails(fund)}
+                  sx={{
+                    cursor: 'pointer',
+                    '&:last-child td, &:last-child th': { border: 0 },
+                    bgcolor: selectedForCompare.has(fund.code) ? 'rgba(99, 102, 241, 0.05)' : 'inherit',
+                  }}
                 >
+                  {compareMode && (
+                    <TableCell padding="checkbox">
+                      <Checkbox
+                        checked={selectedForCompare.has(fund.code)}
+                        onChange={() => handleToggleCompare(fund.code)}
+                        onClick={(e) => e.stopPropagation()}
+                        sx={{
+                          color: '#94a3b8',
+                          '&.Mui-checked': { color: CHART_COLORS[idx % CHART_COLORS.length] },
+                        }}
+                      />
+                    </TableCell>
+                  )}
                   <TableCell sx={{ py: 2.5 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                       <Box sx={{ p: 1, bgcolor: '#f1f5f9', borderRadius: '10px', color: '#6366f1' }}>    
@@ -412,6 +589,264 @@ export default function FundsPage() {
           </Table>
         </TableContainer>
       )}
+
+      {/* Comparison Results Dialog */}
+      <Dialog
+        open={comparisonData !== null}
+        onClose={() => setComparisonData(null)}
+        maxWidth="lg"
+        fullWidth
+        scroll="paper"
+        PaperProps={{
+          sx: {
+            borderRadius: '20px',
+            bgcolor: '#ffffff',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+            maxHeight: '90vh',
+          }
+        }}
+      >
+        {comparisonData && (
+          <>
+            <DialogTitle sx={{ p: 0 }}>
+              <Box sx={{ p: 2.5, bgcolor: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Typography variant="h6" sx={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <CompareArrowsIcon sx={{ color: '#6366f1' }} />
+                  {t('funds.compare.results_title')} ({Object.keys(comparisonData.nav_comparison?.curves || {}).length} {t('funds.compare.funds')})
+                </Typography>
+                <IconButton size="small" onClick={() => setComparisonData(null)} sx={{ color: '#94a3b8' }}>
+                  <CloseIcon />
+                </IconButton>
+              </Box>
+            </DialogTitle>
+
+            <DialogContent sx={{ p: 0 }}>
+              <Tabs
+                value={compareTab}
+                onChange={(_, v) => setCompareTab(v)}
+                sx={{
+                  borderBottom: '1px solid #f1f5f9',
+                  px: 2,
+                  '& .MuiTab-root': { textTransform: 'none', fontWeight: 700 },
+                  '& .Mui-selected': { color: '#6366f1 !important' },
+                  '& .MuiTabs-indicator': { bgcolor: '#6366f1' },
+                }}
+              >
+                <Tab label={t('funds.compare.nav_chart')} />
+                <Tab label={t('funds.compare.return_compare')} />
+                <Tab label={t('funds.compare.risk_compare')} />
+                <Tab label={t('funds.compare.holdings_overlap')} />
+              </Tabs>
+
+              <Box sx={{ p: 3 }}>
+                {/* NAV Chart */}
+                {compareTab === 0 && (
+                  <Box sx={{ height: 400 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={getNavChartData()}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                        <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
+                        <YAxis tick={{ fontSize: 11 }} domain={['auto', 'auto']} />
+                        <RechartsTooltip formatter={(value: any) => [value?.toFixed(4), '']} />
+                        <Legend />
+                        {Object.keys(comparisonData.nav_comparison?.curves || {}).map((code, idx) => (
+                          <Line
+                            key={code}
+                            type="monotone"
+                            dataKey={code}
+                            name={comparisonData.nav_comparison.curves[code].name}
+                            stroke={CHART_COLORS[idx % CHART_COLORS.length]}
+                            dot={false}
+                            strokeWidth={2}
+                          />
+                        ))}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </Box>
+                )}
+
+                {/* Return Comparison */}
+                {compareTab === 1 && comparisonData.return_comparison && (
+                  <TableContainer>
+                    <Table>
+                      <TableHead sx={{ bgcolor: '#f8fafc' }}>
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 800 }}>{t('funds.compare.fund_name')}</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 800 }}>1M</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 800 }}>3M</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 800 }}>6M</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 800 }}>1Y</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 800 }}>3Y</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {Object.values(comparisonData.return_comparison.returns).map((fund: any, idx) => (
+                          <TableRow key={fund.code} hover>
+                            <TableCell>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: CHART_COLORS[idx % CHART_COLORS.length] }} />
+                                <Typography sx={{ fontWeight: 600 }}>{fund.name}</Typography>
+                              </Box>
+                            </TableCell>
+                            {['1m', '3m', '6m', '1y', '3y'].map((period) => (
+                              <TableCell
+                                key={period}
+                                align="right"
+                                sx={{
+                                  fontFamily: 'JetBrains Mono',
+                                  fontWeight: 700,
+                                  color: fund[period] > 0 ? 'success.main' : fund[period] < 0 ? 'error.main' : 'text.primary',
+                                }}
+                              >
+                                {fund[period] !== null ? `${fund[period] > 0 ? '+' : ''}${fund[period]}%` : '-'}
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )}
+
+                {/* Risk Comparison */}
+                {compareTab === 2 && comparisonData.risk_comparison && (
+                  <TableContainer>
+                    <Table>
+                      <TableHead sx={{ bgcolor: '#f8fafc' }}>
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 800 }}>{t('funds.compare.fund_name')}</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 800 }}>{t('funds.risk.sharpe_ratio')}</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 800 }}>{t('funds.risk.max_drawdown')}</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 800 }}>{t('funds.risk.volatility')}</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 800 }}>{t('funds.risk.calmar_ratio')}</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 800 }}>{t('funds.risk.annual_return')}</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {Object.values(comparisonData.risk_comparison.metrics).map((fund: any, idx) => (
+                          <TableRow key={fund.code} hover>
+                            <TableCell>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: CHART_COLORS[idx % CHART_COLORS.length] }} />
+                                <Typography sx={{ fontWeight: 600 }}>{fund.name}</Typography>
+                              </Box>
+                            </TableCell>
+                            <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono', fontWeight: 700 }}>{fund.sharpe_ratio}</TableCell>
+                            <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono', fontWeight: 700, color: 'error.main' }}>-{fund.max_drawdown}%</TableCell>
+                            <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono', fontWeight: 700 }}>{fund.annual_volatility}%</TableCell>
+                            <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono', fontWeight: 700 }}>{fund.calmar_ratio}</TableCell>
+                            <TableCell
+                              align="right"
+                              sx={{
+                                fontFamily: 'JetBrains Mono',
+                                fontWeight: 700,
+                                color: fund.annual_return > 0 ? 'success.main' : 'error.main',
+                              }}
+                            >
+                              {fund.annual_return > 0 ? '+' : ''}{fund.annual_return}%
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )}
+
+                {/* Holdings Overlap */}
+                {compareTab === 3 && comparisonData.holdings_overlap && (
+                  <Box>
+                    {comparisonData.holdings_overlap.common_stocks?.length > 0 ? (
+                      <>
+                        <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 700 }}>
+                          {t('funds.compare.common_holdings')} ({comparisonData.holdings_overlap.common_stocks.length})
+                        </Typography>
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                          {comparisonData.holdings_overlap.common_stocks.map((stock: any) => (
+                            <Chip
+                              key={stock.code}
+                              label={`${stock.name} (${stock.count} ${t('funds.compare.funds')})`}
+                              variant="outlined"
+                              size="small"
+                              sx={{ borderRadius: '8px' }}
+                            />
+                          ))}
+                        </Box>
+                      </>
+                    ) : (
+                      <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
+                        {comparisonData.holdings_overlap.message || t('funds.compare.no_common_holdings')}
+                      </Typography>
+                    )}
+                  </Box>
+                )}
+              </Box>
+
+              {/* Ranking Section */}
+              {comparisonData.ranking && (
+                <Box sx={{ p: 3, borderTop: '1px solid #f1f5f9', bgcolor: '#fcfcfc' }}>
+                  <Typography variant="h6" sx={{ mb: 2, fontWeight: 700 }}>
+                    {t('funds.compare.ranking')}
+                  </Typography>
+                  <Grid container spacing={2}>
+                    {comparisonData.ranking.ranking.map((fund: any) => (
+                      <Grid size={{ xs: 12, sm: 6, md: 4 }} key={fund.code}>
+                        <Paper
+                          variant="outlined"
+                          sx={{
+                            p: 2,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 2,
+                            borderRadius: '12px',
+                            borderLeft: fund.rank === 1 ? 4 : 0,
+                            borderColor: fund.rank === 1 ? 'warning.main' : '#e2e8f0',
+                            bgcolor: fund.rank === 1 ? 'rgba(245, 158, 11, 0.05)' : '#fff',
+                          }}
+                        >
+                          <Typography
+                            variant="h4"
+                            sx={{
+                              fontWeight: 900,
+                              fontFamily: 'JetBrains Mono',
+                              color: fund.rank === 1 ? 'warning.main' : fund.rank === 2 ? '#94a3b8' : fund.rank === 3 ? '#cd7f32' : 'text.secondary',
+                            }}
+                          >
+                            #{fund.rank}
+                          </Typography>
+                          <Box>
+                            <Typography variant="body1" sx={{ fontWeight: 700 }}>{fund.name}</Typography>
+                            <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'JetBrains Mono' }}>
+                              {t('funds.compare.score')}: {fund.score}
+                            </Typography>
+                          </Box>
+                        </Paper>
+                      </Grid>
+                    ))}
+                  </Grid>
+                </Box>
+              )}
+            </DialogContent>
+
+            <DialogActions sx={{ p: 2, borderTop: '1px solid #f1f5f9', bgcolor: '#fcfcfc' }}>
+              <Button
+                onClick={() => setComparisonData(null)}
+                variant="contained"
+                sx={{
+                  bgcolor: '#0f172a',
+                  color: '#ffffff',
+                  px: 4,
+                  borderRadius: '10px',
+                  textTransform: 'none',
+                  fontWeight: 700,
+                  '&:hover': { bgcolor: '#1e293b' }
+                }}
+              >
+                {t('funds.details.close')}
+              </Button>
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
 
       {/* Notifications */}
       <Snackbar 

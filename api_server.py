@@ -24,8 +24,10 @@ from src.analysis.post_market import PostMarketAnalyst
 from src.analysis.sentiment.dashboard import SentimentDashboard
 from src.analysis.commodities.gold_silver import GoldSilverAnalyst
 from src.analysis.dashboard import DashboardService
+from src.analysis.fund import FundDiagnosis, RiskMetricsCalculator, DrawdownAnalyzer, FundComparison, PortfolioAnalyzer
 from src.data_sources.akshare_api import search_funds
 from src.storage.db import init_db, get_active_funds, get_all_funds, upsert_fund, delete_fund, get_fund_by_code, get_all_stocks, upsert_stock, delete_stock, get_stock_by_code, search_stock_basic, get_stock_basic_count, get_stock_basic_last_updated
+from src.storage.db import get_user_positions, get_position_by_id, create_position, update_position, delete_position, get_portfolio_summary, get_diagnosis_cache, save_diagnosis_cache
 from src.services.news_service import news_service
 from src.services.assistant_service import assistant_service
 from src.scheduler.manager import scheduler_manager
@@ -3454,6 +3456,471 @@ async def get_assistant_suggestions(
     except Exception as e:
         print(f"Error getting suggestions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ====================================================================
+# Fund Analysis API - Diagnosis, Risk Metrics, Comparison
+# ====================================================================
+
+class FundCompareRequest(BaseModel):
+    codes: List[str]
+
+
+class PositionCreate(BaseModel):
+    fund_code: str
+    fund_name: Optional[str] = None
+    shares: float
+    cost_basis: float
+    purchase_date: str
+    notes: Optional[str] = None
+
+
+class PositionUpdate(BaseModel):
+    fund_name: Optional[str] = None
+    shares: Optional[float] = None
+    cost_basis: Optional[float] = None
+    purchase_date: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@app.get("/api/funds/{code}/diagnosis")
+async def get_fund_diagnosis(
+    code: str,
+    force_refresh: bool = False,
+    current_user: User = Depends(get_current_user)
+):
+    """Get fund diagnosis with five-dimension scoring and radar chart data."""
+    try:
+        # Check cache first
+        if not force_refresh:
+            cached = get_diagnosis_cache(code)
+            if cached and cached.get('diagnosis'):
+                return cached['diagnosis']
+
+        # Fetch NAV history
+        loop = asyncio.get_running_loop()
+        nav_history = await loop.run_in_executor(None, _get_fund_nav_history, code, 500)
+
+        if not nav_history:
+            raise HTTPException(status_code=404, detail=f"No NAV history found for fund {code}")
+
+        # Calculate diagnosis
+        diagnoser = FundDiagnosis()
+        diagnosis = diagnoser.diagnose(code, nav_history)
+
+        # Cache result (6 hours TTL)
+        if diagnosis.get('score', 0) > 0:
+            save_diagnosis_cache(code, diagnosis, int(diagnosis['score']), ttl_hours=6)
+
+        return sanitize_for_json(diagnosis)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error calculating fund diagnosis for {code}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/funds/{code}/risk-metrics")
+async def get_fund_risk_metrics(
+    code: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get comprehensive risk metrics for a fund."""
+    try:
+        # Fetch NAV history
+        loop = asyncio.get_running_loop()
+        nav_history = await loop.run_in_executor(None, _get_fund_nav_history, code, 500)
+
+        if not nav_history:
+            raise HTTPException(status_code=404, detail=f"No NAV history found for fund {code}")
+
+        # Calculate risk metrics
+        calculator = RiskMetricsCalculator()
+        metrics = calculator.calculate_all_metrics(nav_history)
+
+        return sanitize_for_json(metrics)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error calculating risk metrics for {code}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/funds/{code}/drawdown-history")
+async def get_fund_drawdown_history(
+    code: str,
+    threshold: float = 0.05,
+    current_user: User = Depends(get_current_user)
+):
+    """Get detailed drawdown history analysis for a fund."""
+    try:
+        # Fetch NAV history
+        loop = asyncio.get_running_loop()
+        nav_history = await loop.run_in_executor(None, _get_fund_nav_history, code, 500)
+
+        if not nav_history:
+            raise HTTPException(status_code=404, detail=f"No NAV history found for fund {code}")
+
+        # Analyze drawdowns
+        analyzer = DrawdownAnalyzer(threshold=threshold)
+        analysis = analyzer.analyze_drawdowns(nav_history)
+
+        return sanitize_for_json(analysis)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error analyzing drawdowns for {code}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/funds/compare")
+async def compare_funds_advanced(
+    request: FundCompareRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Compare multiple funds (up to 10) with comprehensive analysis.
+    Includes NAV curves, returns, risk metrics, and holdings overlap.
+    """
+    try:
+        codes = request.codes
+
+        if len(codes) < 2:
+            raise HTTPException(status_code=400, detail="Please select at least 2 funds to compare")
+        if len(codes) > 10:
+            raise HTTPException(status_code=400, detail="Maximum 10 funds allowed for comparison")
+
+        # Fetch NAV history for all funds in parallel
+        loop = asyncio.get_running_loop()
+
+        async def fetch_fund_data(code: str):
+            nav_history = await loop.run_in_executor(None, _get_fund_nav_history, code, 500)
+            fund_info = await loop.run_in_executor(None, _get_fund_basic_info, code)
+            holdings = await loop.run_in_executor(None, _get_fund_holdings_list, code)
+            return {
+                'code': code,
+                'name': fund_info.get('name', code) if fund_info else code,
+                'nav_history': nav_history,
+                'holdings': holdings,
+            }
+
+        tasks = [fetch_fund_data(code) for code in codes]
+        funds_data = await asyncio.gather(*tasks)
+
+        # Filter out funds with insufficient data
+        valid_funds = [f for f in funds_data if f.get('nav_history') and len(f['nav_history']) >= 20]
+
+        if len(valid_funds) < 2:
+            raise HTTPException(status_code=400, detail="Not enough funds with valid data for comparison")
+
+        # Perform comparison
+        comparator = FundComparison()
+        result = comparator.compare(valid_funds)
+
+        return sanitize_for_json(result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error comparing funds: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ====================================================================
+# Portfolio Management API - Positions CRUD
+# ====================================================================
+
+@app.get("/api/portfolio/positions")
+async def get_positions(
+    current_user: User = Depends(get_current_user)
+):
+    """Get all fund positions for current user."""
+    try:
+        positions = get_user_positions(current_user.id)
+
+        # Enrich with current NAV and P&L
+        enriched = []
+        for pos in positions:
+            fund_code = pos['fund_code']
+
+            # Try to get current NAV
+            current_nav = None
+            try:
+                loop = asyncio.get_running_loop()
+                nav_history = await loop.run_in_executor(None, _get_fund_nav_history, fund_code, 5)
+                if nav_history:
+                    current_nav = float(nav_history[-1]['value'])
+            except:
+                pass
+
+            # Calculate P&L
+            shares = float(pos.get('shares', 0))
+            cost_basis = float(pos.get('cost_basis', 0))
+
+            position_cost = shares * cost_basis
+            position_value = shares * (current_nav or cost_basis)
+            pnl = position_value - position_cost
+            pnl_pct = (current_nav / cost_basis - 1) * 100 if cost_basis > 0 and current_nav else 0
+
+            enriched.append({
+                **pos,
+                'current_nav': round(current_nav, 4) if current_nav else None,
+                'position_cost': round(position_cost, 2),
+                'position_value': round(position_value, 2),
+                'pnl': round(pnl, 2),
+                'pnl_pct': round(pnl_pct, 2),
+            })
+
+        return {"positions": enriched}
+    except Exception as e:
+        print(f"Error getting positions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/portfolio/positions")
+async def create_new_position(
+    position: PositionCreate,
+    current_user: User = Depends(get_current_user)
+):
+    """Create a new fund position."""
+    try:
+        position_id = create_position(position.dict(), current_user.id)
+        return {"id": position_id, "message": "Position created successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"Error creating position: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/portfolio/positions/{position_id}")
+async def update_existing_position(
+    position_id: int,
+    updates: PositionUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    """Update an existing position."""
+    try:
+        # Filter out None values
+        update_dict = {k: v for k, v in updates.dict().items() if v is not None}
+
+        if not update_dict:
+            raise HTTPException(status_code=400, detail="No updates provided")
+
+        success = update_position(position_id, current_user.id, update_dict)
+        if not success:
+            raise HTTPException(status_code=404, detail="Position not found")
+
+        return {"message": "Position updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error updating position: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/portfolio/positions/{position_id}")
+async def delete_existing_position(
+    position_id: int,
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a position."""
+    try:
+        success = delete_position(position_id, current_user.id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Position not found")
+
+        return {"message": "Position deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error deleting position: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/portfolio/summary")
+async def get_portfolio_summary_api(
+    current_user: User = Depends(get_current_user)
+):
+    """Get portfolio summary with total value, P&L, and allocation."""
+    try:
+        positions = get_user_positions(current_user.id)
+
+        if not positions:
+            return {
+                "total_value": 0,
+                "total_cost": 0,
+                "total_pnl": 0,
+                "total_pnl_pct": 0,
+                "positions": [],
+                "allocation": [],
+            }
+
+        # Build NAV map
+        fund_nav_map = {}
+        loop = asyncio.get_running_loop()
+
+        for pos in positions:
+            fund_code = pos['fund_code']
+            if fund_code not in fund_nav_map:
+                try:
+                    nav_history = await loop.run_in_executor(None, _get_fund_nav_history, fund_code, 5)
+                    if nav_history:
+                        fund_nav_map[fund_code] = float(nav_history[-1]['value'])
+                except:
+                    pass
+
+        # Calculate summary
+        analyzer = PortfolioAnalyzer()
+        summary = analyzer.calculate_portfolio_summary(positions, fund_nav_map)
+
+        return sanitize_for_json(summary)
+    except Exception as e:
+        print(f"Error getting portfolio summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/portfolio/overlap")
+async def get_portfolio_overlap(
+    current_user: User = Depends(get_current_user)
+):
+    """Analyze holdings overlap across portfolio funds."""
+    try:
+        positions = get_user_positions(current_user.id)
+
+        if not positions:
+            return {"message": "No positions in portfolio"}
+
+        # Get holdings for each fund
+        fund_holdings = {}
+        position_weights = {}
+        loop = asyncio.get_running_loop()
+
+        # First, calculate total portfolio value for weights
+        total_value = 0
+        fund_values = {}
+        fund_nav_map = {}
+
+        for pos in positions:
+            fund_code = pos['fund_code']
+            shares = float(pos.get('shares', 0))
+            cost_basis = float(pos.get('cost_basis', 1))
+
+            # Get current NAV
+            try:
+                nav_history = await loop.run_in_executor(None, _get_fund_nav_history, fund_code, 5)
+                if nav_history:
+                    current_nav = float(nav_history[-1]['value'])
+                    fund_nav_map[fund_code] = current_nav
+                else:
+                    current_nav = cost_basis
+            except:
+                current_nav = cost_basis
+
+            position_value = shares * current_nav
+            fund_values[fund_code] = fund_values.get(fund_code, 0) + position_value
+            total_value += position_value
+
+        # Calculate weights and fetch holdings
+        for fund_code, value in fund_values.items():
+            position_weights[fund_code] = value / total_value if total_value > 0 else 0
+
+            try:
+                holdings = await loop.run_in_executor(None, _get_fund_holdings_list, fund_code)
+                if holdings:
+                    fund_holdings[fund_code] = holdings
+            except:
+                pass
+
+        if not fund_holdings:
+            return {"message": "No holdings data available for portfolio funds"}
+
+        # Analyze overlap
+        analyzer = PortfolioAnalyzer()
+        overlap = analyzer.analyze_holdings_overlap(fund_holdings, position_weights)
+
+        return sanitize_for_json(overlap)
+    except Exception as e:
+        print(f"Error analyzing portfolio overlap: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ====================================================================
+# Helper functions for fund data retrieval
+# ====================================================================
+
+def _get_fund_nav_history(fund_code: str, days: int = 100) -> List[Dict]:
+    """Get fund NAV history."""
+    try:
+        df = ak.fund_open_fund_info_em(symbol=fund_code, indicator="单位净值走势")
+        if df is None or df.empty:
+            return []
+
+        # Normalize column names
+        if '净值日期' not in df.columns:
+            cols = list(df.columns)
+            if len(cols) >= 2:
+                df = df.rename(columns={cols[0]: '净值日期', cols[1]: '单位净值'})
+
+        if '净值日期' not in df.columns or '单位净值' not in df.columns:
+            return []
+
+        df['净值日期'] = pd.to_datetime(df['净值日期'], errors='coerce')
+        df = df.dropna(subset=['净值日期', '单位净值'])
+        df = df.sort_values('净值日期').tail(days)
+
+        return [
+            {'date': row['净值日期'].strftime('%Y-%m-%d'), 'value': float(row['单位净值'])}
+            for _, row in df.iterrows()
+        ]
+    except Exception as e:
+        print(f"Error fetching NAV history for {fund_code}: {e}")
+        return []
+
+
+def _get_fund_basic_info(fund_code: str) -> Optional[Dict]:
+    """Get basic fund information."""
+    try:
+        # Try to get from fund name list first
+        all_funds = get_all_fund_list()
+        for fund in all_funds:
+            if fund.get('code') == fund_code:
+                return {'code': fund_code, 'name': fund.get('name', ''), 'type': fund.get('type', '')}
+        return None
+    except Exception as e:
+        print(f"Error fetching fund info for {fund_code}: {e}")
+        return None
+
+
+def _get_fund_holdings_list(fund_code: str) -> List[Dict]:
+    """Get fund top holdings as a list."""
+    try:
+        year = str(datetime.now().year)
+        df = ak.fund_portfolio_hold_em(symbol=fund_code, date=year)
+
+        if df is None or df.empty:
+            # Try previous year
+            df = ak.fund_portfolio_hold_em(symbol=fund_code, date=str(int(year) - 1))
+
+        if df is None or df.empty:
+            return []
+
+        # Get latest quarter data
+        if '季度' in df.columns:
+            latest_quarter = df['季度'].max()
+            df = df[df['季度'] == latest_quarter]
+
+        holdings = []
+        for _, row in df.head(10).iterrows():
+            holdings.append({
+                'code': row.get('股票代码', ''),
+                'name': row.get('股票名称', ''),
+                'weight': float(row.get('占净值比例', 0)) if row.get('占净值比例') else 0,
+            })
+
+        return holdings
+    except Exception as e:
+        print(f"Error fetching holdings for {fund_code}: {e}")
+        return []
 
 
 # ====================================================================

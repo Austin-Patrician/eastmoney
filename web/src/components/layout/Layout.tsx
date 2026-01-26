@@ -34,6 +34,7 @@ import ShowChartIcon from '@mui/icons-material/ShowChart';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import NewspaperIcon from '@mui/icons-material/Newspaper';
+import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 
@@ -126,6 +127,8 @@ export default function Layout() {
     { text: t('layout.menu.dashboard'), icon: <SpeedIcon />, path: '/dashboard', subtitle: t('layout.menu.dashboard_sub') },
 
     { text: t('layout.menu.universe'), icon: <PieChartIcon />, path: '/funds', subtitle: t('layout.menu.universe_sub') },
+
+    { text: t('layout.menu.portfolio'), icon: <AccountBalanceWalletIcon />, path: '/portfolio', subtitle: t('layout.menu.portfolio_sub') },
 
     { text: t('layout.menu.stocks'), icon: <ShowChartIcon />, path: '/stocks', subtitle: t('layout.menu.stocks_sub') },
 
