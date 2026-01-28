@@ -1,6 +1,6 @@
 import React from 'react';
-import { Box, Tooltip, useTheme, alpha, IconButton } from '@mui/material';
-import { Brightness1 } from '@mui/icons-material';
+import { Box, Tooltip, useTheme, alpha, Typography, Chip } from '@mui/material';
+import { TrendingUp, TrendingDown, RadioButtonUnchecked, AutoAwesome } from '@mui/icons-material';
 import { useTranslation } from 'react-i18next';
 
 interface AISignalCellProps {
@@ -20,77 +20,144 @@ const AISignalCell: React.FC<AISignalCellProps> = ({
   const { t } = useTranslation();
 
   const getSignalConfig = () => {
+    const strengthPercent = Math.round(strength * 100);
+
     switch (signalType) {
       case 'opportunity':
         return {
-          color: theme.palette.success.main,
-          label: t('portfolio.opportunity', '机会'),
-          icon: '🟢',
-          description: t('portfolio.opportunitySignal', '存在买入机会'),
+          color: '#10b981', // emerald-500
+          bgColor: alpha('#10b981', 0.12),
+          borderColor: alpha('#10b981', 0.3),
+          glowColor: 'rgba(16, 185, 129, 0.4)',
+          label: t('portfolio.buy', '买入'),
+          icon: TrendingUp,
+          strengthLabel: strengthPercent >= 70 ? '强' : strengthPercent >= 40 ? '中' : '弱',
         };
       case 'risk':
         return {
-          color: theme.palette.error.main,
-          label: t('portfolio.risk', '风险'),
-          icon: '🔴',
-          description: t('portfolio.riskSignal', '存在风险信号'),
+          color: '#ef4444', // red-500
+          bgColor: alpha('#ef4444', 0.12),
+          borderColor: alpha('#ef4444', 0.3),
+          glowColor: 'rgba(239, 68, 68, 0.4)',
+          label: t('portfolio.sell', '卖出'),
+          icon: TrendingDown,
+          strengthLabel: strengthPercent >= 70 ? '强' : strengthPercent >= 40 ? '中' : '弱',
         };
       case 'neutral':
       default:
         return {
-          color: theme.palette.grey[400],
-          label: t('portfolio.neutral', '中性'),
-          icon: '⚪',
-          description: t('portfolio.neutralSignal', '暂无明显信号'),
+          color: '#6b7280', // gray-500
+          bgColor: alpha('#9ca3af', 0.1),
+          borderColor: alpha('#9ca3af', 0.25),
+          glowColor: 'transparent',
+          label: t('portfolio.hold', '持有'),
+          icon: RadioButtonUnchecked,
+          strengthLabel: '',
         };
     }
   };
 
   const config = getSignalConfig();
-
-  const getStrengthOpacity = () => {
-    if (signalType === 'neutral') return 0.3;
-    return 0.3 + strength * 0.7;
-  };
+  const IconComponent = config.icon;
 
   return (
     <Tooltip
       title={
-        <Box>
-          <Box sx={{ fontWeight: 600, mb: 0.5 }}>{config.label}</Box>
-          <Box sx={{ fontSize: '0.85em' }}>{summary || config.description}</Box>
+        <Box sx={{ p: 0.5 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+            <AutoAwesome sx={{ fontSize: 14, color: '#fbbf24' }} />
+            <Typography variant="caption" fontWeight={600} sx={{ color: 'common.white' }}>
+              AI 智能分析
+            </Typography>
+          </Box>
+          <Typography variant="body2" sx={{ mb: 1, color: 'common.white' }}>
+            {summary || t('portfolio.noSignalDescription', '暂无详细分析')}
+          </Typography>
           {signalType !== 'neutral' && (
-            <Box sx={{ fontSize: '0.8em', mt: 0.5, opacity: 0.8 }}>
-              {t('portfolio.signalStrength', '信号强度')}: {(strength * 100).toFixed(0)}%
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.7)' }}>
+                信号强度:
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 0.5 }}>
+                {[1, 2, 3, 4, 5].map((level) => (
+                  <Box
+                    key={level}
+                    sx={{
+                      width: 8,
+                      height: 12,
+                      borderRadius: 0.5,
+                      bgcolor: level <= Math.ceil(strength * 5) ? config.color : 'rgba(255,255,255,0.2)',
+                      transition: 'background-color 0.2s',
+                    }}
+                  />
+                ))}
+              </Box>
+              <Typography variant="caption" sx={{ color: config.color, fontWeight: 600 }}>
+                {(strength * 100).toFixed(0)}%
+              </Typography>
             </Box>
           )}
-          <Box sx={{ fontSize: '0.8em', mt: 0.5, color: theme.palette.primary.light }}>
-            {t('portfolio.clickForDetails', '点击查看详情')}
-          </Box>
+          <Typography
+            variant="caption"
+            sx={{ display: 'block', mt: 1, color: theme.palette.primary.light, opacity: 0.9 }}
+          >
+            {t('portfolio.clickForDetails', '点击查看详情')} →
+          </Typography>
         </Box>
       }
       arrow
+      placement="top"
     >
-      <IconButton
-        size="small"
+      <Chip
+        icon={<IconComponent sx={{ fontSize: 14, color: `${config.color} !important` }} />}
+        label={
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Typography
+              variant="caption"
+              sx={{ fontWeight: 600, fontSize: '0.75rem', letterSpacing: 0.5 }}
+            >
+              {config.label}
+            </Typography>
+            {signalType !== 'neutral' && config.strengthLabel && (
+              <Typography
+                variant="caption"
+                sx={{
+                  fontSize: '0.65rem',
+                  opacity: 0.85,
+                  fontWeight: 500,
+                }}
+              >
+                ({config.strengthLabel})
+              </Typography>
+            )}
+          </Box>
+        }
         onClick={onClick}
+        size="small"
         sx={{
-          p: 0.5,
+          height: 24,
+          bgcolor: config.bgColor,
+          border: `1px solid ${config.borderColor}`,
+          color: config.color,
+          cursor: 'pointer',
+          transition: 'all 0.2s ease-in-out',
+          boxShadow: signalType !== 'neutral' ? `0 0 6px ${alpha(config.color, 0.2)}` : 'none',
           '&:hover': {
-            backgroundColor: alpha(config.color, 0.1),
+            bgcolor: alpha(config.color, 0.18),
+            borderColor: config.color,
+            boxShadow: signalType !== 'neutral' ? `0 0 10px ${alpha(config.color, 0.3)}` : 'none',
+            transform: 'translateY(-1px)',
+          },
+          '& .MuiChip-icon': {
+            marginLeft: '6px',
+            marginRight: '-2px',
+          },
+          '& .MuiChip-label': {
+            paddingLeft: '6px',
+            paddingRight: '10px',
           },
         }}
-      >
-        <Brightness1
-          sx={{
-            fontSize: 20,
-            color: config.color,
-            opacity: getStrengthOpacity(),
-            filter: signalType !== 'neutral' ? `drop-shadow(0 0 ${strength * 4}px ${config.color})` : 'none',
-            transition: 'all 0.3s ease',
-          }}
-        />
-      </IconButton>
+      />
     </Tooltip>
   );
 };

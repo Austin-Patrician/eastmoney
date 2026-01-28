@@ -57,52 +57,16 @@ def get_all_stock_spot_map(cache_ttl_seconds: int = 30, force_refresh: bool = Fa
 def get_stock_history(code: str, days: int = 100) -> List[Dict]:
     """
     Fetch daily history for a stock.
-    Returns: List of {date, value, volume, ...}
-    使用 TuShare Pro 作为主要数据源，AkShare 作为后备
-
-    Migration Note: Now uses TuShare as primary source (Phase 4)
     """
-    from config.settings import DATA_SOURCE_PROVIDER
-
     # Use TuShare for stock history
-    if DATA_SOURCE_PROVIDER in ('tushare', 'hybrid'):
-        try:
-            from src.data_sources.data_source_manager import get_stock_history_from_tushare
-            result = get_stock_history_from_tushare(code, days)
-            if result:
-                return result
-        except Exception as e:
-            print(f"TuShare stock history failed, falling back to AkShare: {e}")
-
-    # Fallback to AkShare
     try:
-        code = _normalize_a_stock_code(code)
-        end_date = datetime.now()
-        # Estimate start date (trading days != calendar days, so multiply by 1.5 buffer)
-        start_date = end_date - timedelta(days=int(days * 1.6))
-
-        start_str = start_date.strftime("%Y%m%d")
-        end_str = end_date.strftime("%Y%m%d")
-
-        df = ak.stock_zh_a_hist(symbol=code, period="daily", start_date=start_str, end_date=end_str, adjust="qfq")
-
-        if df is None or df.empty:
-            return []
-
-        # df columns: 日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, ...
-        # Standardize to: date, value (close)
-        result = []
-        for _, row in df.iterrows():
-            result.append({
-                "date": str(row['日期']),
-                "value": float(row['收盘']),
-                "volume": float(row['成交量'])
-            })
-
-        return result
+        from src.data_sources.data_source_manager import get_stock_history_from_tushare
+        result = get_stock_history_from_tushare(code, days)
+        if result:
+                return result
     except Exception as e:
-        print(f"Error fetching history for {code}: {e}")
-        return []
+            print(f"TuShare stock history failed, falling back to AkShare: {e}")
+    
 
 # ============================================================================
 # SECTION 1: 全球宏观市场数据 (Global Macro Data)
@@ -432,21 +396,7 @@ def get_stock_realtime_quote(
         if not code:
             return {}
 
-        # 1. Try Cache
-        if use_cache:
-            # Check global cache variable directly to avoid triggering a full fetch if empty
-            # We only use get_all_stock_spot_map if we WANT to ensure cache is populated, 
-            # but here we want to avoid slow fetch for single stock.
-            # So we check the variable directly (thread-safe lock needed if reading? Reading dict ref is atomic in Py)
-            # But let's use the getter if it doesn't force refresh.
-            # actually get_all_stock_spot_map will fetch if empty.
-            # So check the global variable _A_STOCK_SPOT_CACHE_BY_CODE directly.
-            
-            with _A_STOCK_SPOT_CACHE_LOCK:
-                if _A_STOCK_SPOT_CACHE_BY_CODE is not None:
-                     row = _A_STOCK_SPOT_CACHE_BY_CODE.get(code)
-                     if row: return row
-
+        
         # 2. Fast Fetch (Single Stock)
         try:
             df = ak.stock_bid_ask_em(symbol=code)
@@ -477,24 +427,10 @@ def get_stock_realtime_quote(
                     '外盘': info.get('外盘'),
                     '内盘': info.get('内盘'),
                 }
-        except Exception as e:
+        except BaseException as e:
             # print(f"Bid/Ask fetch failed for {code}: {e}") # Debug only
             pass
-
-        # 3. Fallback: Full Market Fetch (if bid_ask failed, which is rare, or code not found)
-        # Only do this if we really really want data and bid_ask failed.
-        # But for a single stock, fetching 5000 is overkill. 
-        # Better to return empty or try spot_em(single) if it existed (it doesn't).
-        # Let's try get_all_stock_spot_map as last resort if cache was empty and we are desperate.
-        
-        # Actually, if bid_ask failed, maybe code is wrong or market closed?
-        # get_all_stock_spot_map might have it.
-        if force_refresh: # Only if forced, otherwise avoid heavy load
-            by_code = get_all_stock_spot_map(force_refresh=True)
-            if by_code:
-                return by_code.get(code, {})
-
-    except Exception as e:
+    except BaseException as e:
         print(f"Error fetching realtime quote for {stock_code}: {e}")
     return {}
 

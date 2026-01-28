@@ -12,12 +12,14 @@ import {
   Tooltip,
   Snackbar,
   Paper,
+  Dialog,
   useTheme,
   alpha,
 } from '@mui/material';
 import Grid from '@mui/material/Grid';
 import AddIcon from '@mui/icons-material/Add';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import CloseIcon from '@mui/icons-material/Close';
 import ReceiptIcon from '@mui/icons-material/Receipt';
 import DataMigrationIcon from '@mui/icons-material/CloudSync';
 import GridViewIcon from '@mui/icons-material/GridView';
@@ -37,6 +39,7 @@ import {
   createTransaction,
   deleteTransaction,
   deleteUnifiedPosition,
+  updateUnifiedPosition,
   recalculatePosition,
   markAlertRead,
   dismissAlertApi,
@@ -97,8 +100,9 @@ import {
   DailyReturnsDetail as DailyReturnsDetailComponent,
 } from '../components/portfolio';
 import type { TransactionFormData } from '../components/portfolio';
+import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 
-type TabValue = 'overview' | 'transactions' | 'returns';
+type TabValue = 'overview' | 'positions' | 'transactions' | 'returns';
 
 export default function PortfolioPage() {
   const { t } = useTranslation();
@@ -166,6 +170,7 @@ export default function PortfolioPage() {
   // Dialog state
   const [searchDialogOpen, setSearchDialogOpen] = useState(false);
   const [transactionFormOpen, setTransactionFormOpen] = useState(false);
+  const [diagnosisDialogOpen, setDiagnosisDialogOpen] = useState(false);
   const [selectedAsset, setSelectedAsset] = useState<{
     code: string;
     name: string;
@@ -239,7 +244,8 @@ export default function PortfolioPage() {
     setRiskLoading(true);
     try {
       const [riskRes, sparklineRes] = await Promise.all([
-        fetchRiskSummary(portfolioId),
+        // fetchRiskSummary(portfolioId),
+        null,
         fetchPortfolioSparkline(portfolioId, 7),
       ]);
       if (!isMountedRef.current) return;
@@ -412,8 +418,11 @@ export default function PortfolioPage() {
       loadTransactions();
     } else if (tab === 'returns' && !returnsSummary && !returnsLoading) {
       loadReturnsData();
+    } else if (tab === 'positions' && !diagnosis && !diagnosisLoading) {
+      // Lazily load diagnosis when switching to positions tab
+      loadDiagnosis();
     }
-  }, [tab, loadTransactions, loadReturnsData, returnsSummary, returnsLoading]);
+  }, [tab, loadTransactions, loadReturnsData, returnsSummary, returnsLoading, loadDiagnosis, diagnosis, diagnosisLoading]);
 
   // Lazy load correlation data when on overview tab
   useEffect(() => {
@@ -497,6 +506,13 @@ export default function PortfolioPage() {
     await loadPortfolioData(currentPortfolio.id);
     await loadInstitutionalData(currentPortfolio.id);
     showSnackbar(t('common.deleted'), 'success');
+  };
+
+  const handleEditPosition = async (positionId: number, updates: { total_shares?: number; average_cost?: number; notes?: string }) => {
+    if (!currentPortfolio) return;
+    await updateUnifiedPosition(currentPortfolio.id, positionId, updates);
+    await loadPortfolioData(currentPortfolio.id);
+    showSnackbar(t('common.saved'), 'success');
   };
 
   const handleRecalculatePosition = async (positionId: number) => {
@@ -643,6 +659,7 @@ export default function PortfolioPage() {
         }}
       >
         <Tab value="returns" label={t('portfolio.returnsAnalysis', '收益分析')} icon={<ShowChartIcon sx={{ fontSize: 16 }} />} iconPosition="start" />
+        <Tab value="positions" label={t('portfolio.smartPositionsTab', '智能持仓')} icon={<AccountBalanceWalletIcon sx={{ fontSize: 16 }} />} iconPosition="start" />
         <Tab value="overview" label={t('portfolio.commandCenter', '投资指挥舱')} />
         <Tab value="transactions" label={t('portfolio.transaction_history')} icon={<ReceiptIcon sx={{ fontSize: 16 }} />} iconPosition="start" />
       </Tabs>
@@ -773,12 +790,37 @@ export default function PortfolioPage() {
               </Paper>
             </Grid>
           </Grid>
+        </>
+      )}
 
-          {/* Bottom: Smart Position Table with AI Signals */}
+      {tab === 'positions' && (
+        <>
+          {/* Smart Position Table with AI Signals */}
           <Box sx={{ mb: 3 }}>
-            <Typography variant="h6" fontWeight={600} sx={{ mb: 2 }}>
-              {t('portfolio.smartPositions', '智能持仓')}
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+              <Typography variant="h6" fontWeight={600} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <AutoAwesomeIcon sx={{ color: 'primary.main' }} />
+                {t('portfolio.smartPositions', '智能持仓')}
+              </Typography>
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<AutoAwesomeIcon />}
+                onClick={() => setDiagnosisDialogOpen(true)}
+                sx={{ 
+                  textTransform: 'none', 
+                  borderRadius: 2,
+                  color: '#6366f1',
+                  borderColor: alpha('#6366f1', 0.5),
+                  '&:hover': {
+                    borderColor: '#6366f1',
+                    bgcolor: alpha('#6366f1', 0.05),
+                  }
+                }}
+              >
+                {t('portfolio.ai_diagnosis', 'AI Diagnosis')}
+              </Button>
+            </Box>
             <SmartPositionTable
               positions={positions}
               signals={signals}
@@ -786,23 +828,33 @@ export default function PortfolioPage() {
               loadingDiagnosis={diagnosisLoading}
               onRunDiagnosis={loadDiagnosis}
               onDelete={handleDeletePosition}
+              onEdit={handleEditPosition}
               onRecalculate={handleRecalculatePosition}
               onLoadSignalDetail={handleLoadSignalDetail}
               loading={loading || signalsLoading}
             />
           </Box>
 
-          {/* Rebalancing Suggestions */}
-          {(rebalanceSuggestions.length > 0 || diagnosis) && (
-            <Box sx={{ mb: 3 }}>
+          {/* AI组合诊断 & Rebalancing Suggestions */}
+          <Grid container spacing={3}>
+            <Grid size={{ xs: 12, lg: 6 }}>
+              <PortfolioDiagnosisCard
+                diagnosis={diagnosis}
+                loading={diagnosisLoading}
+                onRefresh={loadDiagnosis}
+                sx={{ height: '100%' }}
+              />
+            </Grid>
+            <Grid size={{ xs: 12, lg: 6 }}>
               <RebalanceSuggestions
                 suggestions={rebalanceSuggestions}
                 currentAllocation={currentAllocation}
                 loading={diagnosisLoading}
                 onRefresh={loadDiagnosis}
+                sx={{ height: '100%' }}
               />
-            </Box>
-          )}
+            </Grid>
+          </Grid>
         </>
       )}
 
@@ -847,6 +899,31 @@ export default function PortfolioPage() {
           </Grid>
         </>
       )}
+
+      {/* Diagnosis Dialog */}
+      <Dialog
+        open={diagnosisDialogOpen}
+        onClose={() => setDiagnosisDialogOpen(false)}
+        maxWidth="md"
+        fullWidth
+        PaperProps={{
+          sx: { borderRadius: 3, p: 0, overflow: 'hidden' }
+        }}
+      >
+        <Box sx={{ position: 'relative' }}>
+          <IconButton
+            onClick={() => setDiagnosisDialogOpen(false)}
+            sx={{ position: 'absolute', right: 8, top: 8, zIndex: 1 }}
+          >
+            <CloseIcon />
+          </IconButton>
+          <PortfolioDiagnosisCard
+            diagnosis={diagnosis || null}
+            loading={diagnosisLoading}
+            onRefresh={loadDiagnosis}
+          />
+        </Box>
+      </Dialog>
 
       {/* Dialogs */}
       <AssetSearchDialog

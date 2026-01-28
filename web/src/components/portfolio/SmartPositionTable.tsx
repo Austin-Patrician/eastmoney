@@ -14,25 +14,21 @@ import {
   IconButton,
   Tooltip,
   Button,
-  Dialog,
-  DialogTitle,
-  DialogContent,
   useTheme,
   alpha,
 } from '@mui/material';
 import {
   Delete,
   Refresh,
-  MoreVert,
+  Edit,
   TrendingUp,
   TrendingDown,
   AutoAwesome,
-  Close,
 } from '@mui/icons-material';
 import { useTranslation } from 'react-i18next';
 import AISignalCell from './AISignalCell';
 import AISignalDrawer from './AISignalDrawer';
-import PortfolioDiagnosisCard from './PortfolioDiagnosisCard';
+import EditPositionDialog from './EditPositionDialog';
 import type { PortfolioDiagnosis } from '../../api';
 
 interface Position {
@@ -86,6 +82,7 @@ interface SmartPositionTableProps {
   onRunDiagnosis?: () => void;
   onDelete?: (positionId: number) => void;
   onRecalculate?: (positionId: number) => void;
+  onEdit?: (positionId: number, updates: { total_shares?: number; average_cost?: number; notes?: string }) => Promise<void>;
   onLoadSignalDetail?: (assetCode: string) => Promise<SignalDetail>;
   loading?: boolean;
   showActions?: boolean;
@@ -105,6 +102,7 @@ const SmartPositionTable: React.FC<SmartPositionTableProps> = ({
   onRunDiagnosis,
   onDelete,
   onRecalculate,
+  onEdit,
   onLoadSignalDetail,
   loading = false,
   showActions = true,
@@ -116,7 +114,8 @@ const SmartPositionTable: React.FC<SmartPositionTableProps> = ({
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [showAllPositions, setShowAllPositions] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [diagnosisDialogOpen, setDiagnosisDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingPosition, setEditingPosition] = useState<Position | null>(null);
   const [selectedSignalDetail, setSelectedSignalDetail] = useState<SignalDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
@@ -194,6 +193,17 @@ const SmartPositionTable: React.FC<SmartPositionTableProps> = ({
     }
   };
 
+  const handleEditClick = (position: Position) => {
+    setEditingPosition(position);
+    setEditDialogOpen(true);
+  };
+
+  const handleEditSave = async (positionId: number, updates: { total_shares?: number; average_cost?: number; notes?: string }) => {
+    if (onEdit) {
+      await onEdit(positionId, updates);
+    }
+  };
+
   const handleSignalClick = async (assetCode: string) => {
     if (!onLoadSignalDetail) return;
 
@@ -232,28 +242,6 @@ const SmartPositionTable: React.FC<SmartPositionTableProps> = ({
           overflow: 'hidden',
         }}
       >
-        {onRunDiagnosis && (
-          <Box sx={{ px: 2, py: 1.5, display: 'flex', justifyContent: 'flex-end', borderBottom: `1px solid ${alpha(theme.palette.divider, 0.1)}` }}>
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<AutoAwesome />}
-              onClick={() => setDiagnosisDialogOpen(true)}
-              sx={{ 
-                textTransform: 'none', 
-                borderRadius: 2,
-                color: '#6366f1',
-                borderColor: alpha('#6366f1', 0.5),
-                '&:hover': {
-                  borderColor: '#6366f1',
-                  bgcolor: alpha('#6366f1', 0.05),
-                }
-              }}
-            >
-              {t('portfolio.ai_diagnosis', 'AI Diagnosis')}
-            </Button>
-          </Box>
-        )}
         <TableContainer>
           <Table size="small">
           <TableHead>
@@ -432,6 +420,20 @@ const SmartPositionTable: React.FC<SmartPositionTableProps> = ({
                   {showActions && (
                     <TableCell align="center">
                       <Box sx={{ display: 'flex', justifyContent: 'center', gap: 0.5 }}>
+                        {onEdit && (
+                          <Tooltip title={t('portfolio.edit', '编辑')}>
+                            <IconButton
+                              size="small"
+                              onClick={() => handleEditClick(position)}
+                              sx={{
+                                color: 'primary.main',
+                                '&:hover': { bgcolor: alpha(theme.palette.primary.main, 0.1) },
+                              }}
+                            >
+                              <Edit fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        )}
                         {onRecalculate && (
                           <Tooltip title={t('portfolio.recalculate', '重新计算')}>
                             <IconButton
@@ -497,32 +499,16 @@ const SmartPositionTable: React.FC<SmartPositionTableProps> = ({
         loading={loadingDetail}
       />
 
-      {/* Diagnosis Dialog */}
-      <Dialog
-        open={diagnosisDialogOpen}
-        onClose={() => setDiagnosisDialogOpen(false)}
-        maxWidth="md"
-        fullWidth
-        PaperProps={{
-          sx: { borderRadius: 3, p: 0, overflow: 'hidden' }
+      {/* Edit Position Dialog */}
+      <EditPositionDialog
+        open={editDialogOpen}
+        position={editingPosition}
+        onClose={() => {
+          setEditDialogOpen(false);
+          setEditingPosition(null);
         }}
-      >
-        <Box sx={{ position: 'relative' }}>
-          <IconButton
-            onClick={() => setDiagnosisDialogOpen(false)}
-            sx={{ position: 'absolute', right: 8, top: 8, zIndex: 1 }}
-          >
-            <Close />
-          </IconButton>
-          <PortfolioDiagnosisCard
-            diagnosis={diagnosis || null}
-            loading={loadingDiagnosis}
-            onRefresh={() => {
-              if (onRunDiagnosis) onRunDiagnosis();
-            }}
-          />
-        </Box>
-      </Dialog>
+        onSave={handleEditSave}
+      />
     </>
   );
 };

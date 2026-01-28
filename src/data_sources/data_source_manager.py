@@ -332,34 +332,52 @@ def get_fund_info_from_tushare(fund_code: str) -> pd.DataFrame:
         DataFrame with NAV history
     """
     try:
-        # TuShare fund codes don't need exchange suffix, but might need .OF/.OF suffix
-        # Most open-ended funds use 6-digit code directly
+        # TuShare fund codes need suffix.
+        # If 6 digits, assume .OF (Open Fund) as default for funds.
+        # Some ETFs might use .SH/.SZ, but this function is often used for open funds.
+        # Check if already has suffix
+        if len(fund_code) == 6 and fund_code.isdigit():
+             ts_code = f"{fund_code}.OF"
+        else:
+             ts_code = fund_code
+
         end_date = format_date_yyyymmdd()
         start_date = format_date_yyyymmdd(datetime.now() - timedelta(days=365))
 
         df = tushare_client.get_fund_nav(
-            ts_code=fund_code,
+            ts_code=ts_code,
             start_date=start_date,
             end_date=end_date
         )
+        
+        # If .OF failed, maybe it's an ETF? Try without suffix (let tushare_client.normalize handle it if it was a stock, but get_fund_nav expects specific fund code)
+        # Actually tushare_client.get_fund_nav just passes ts_code.
+        # If it failed (empty), we could try other suffixes, but let's stick to .OF first.
+        
+        if df is None or df.empty:
+             # Try .SH or .SZ if .OF failed?
+             # But for now, just return empty if failed.
+             pass
 
         if df is None or df.empty:
             return pd.DataFrame()
 
         # Map TuShare columns to AkShare format
-        # TuShare: end_date, unit_nav, accum_nav
+        # TuShare: nav_date (not end_date), unit_nav, accum_nav
         # AkShare: 净值日期, 单位净值, 日增长率
 
         df = df.rename(columns={
-            'end_date': '净值日期',
+            'nav_date': '净值日期',
             'unit_nav': '单位净值',
         })
 
         # Calculate daily change rate
         if '单位净值' in df.columns:
+            # Sort by date ascending to calculate pct_change correctly
+            df = df.sort_values('净值日期', ascending=True)
             df['日增长率'] = df['单位净值'].pct_change() * 100
 
-        # Sort by date descending
+        # Sort by date descending for return
         df = df.sort_values('净值日期', ascending=False).reset_index(drop=True)
 
         return df[['净值日期', '单位净值', '日增长率']]
@@ -918,8 +936,15 @@ def get_top_money_flow_from_tushare(limit: int = 10) -> List[Dict]:
         return []
 
     try:
-        # Get latest trade date if today is not a trading day
-        trade_date = tushare_client.get_latest_trade_date()
+        # TuShare hsgt_top10 data is usually available for the previous trading day
+        # especially when called during or shortly after trading hours.
+        # Use offset=1 to get the trading day before the latest one.
+        trade_date = tushare_client.get_latest_trade_date(offset=1)
+        
+        if not trade_date:
+            # Fallback to latest if offset=1 fails
+            trade_date = tushare_client.get_latest_trade_date(offset=0)
+            
         if not trade_date:
             trade_date = format_date_yyyymmdd()
 

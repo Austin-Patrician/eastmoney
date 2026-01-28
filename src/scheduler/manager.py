@@ -6,7 +6,10 @@ import logging
 import asyncio
 from datetime import datetime, date
 from typing import Dict, Optional, Set
-from src.storage.db import get_active_funds, get_fund_by_code, get_active_stocks, get_stock_by_code
+from src.storage.db import (
+    get_active_funds, get_fund_by_code, get_active_stocks, get_stock_by_code,
+    get_all_portfolios, get_portfolio_positions, save_portfolio_snapshot, get_latest_snapshot
+)
 from src.analysis.pre_market import PreMarketAnalyst
 from src.analysis.post_market import PostMarketAnalyst
 from src.analysis.dashboard import DashboardService
@@ -78,6 +81,7 @@ class SchedulerManager:
         print("Starting Scheduler Manager...")
         self.refresh_all_jobs()
         self.add_dashboard_refresh_job()
+        self.add_daily_snapshot_job()
         
     def refresh_all_jobs(self):
         """Clear all and reload from DB (All users)"""
@@ -92,6 +96,8 @@ class SchedulerManager:
             self.add_stock_jobs(stock)
         # Re-add dashboard job since we removed all
         self.add_dashboard_refresh_job()
+        # Re-add daily snapshot job
+        self.add_daily_snapshot_job()
 
     def add_dashboard_refresh_job(self):
         """Schedule dashboard cache refresh every 5 minutes"""
@@ -106,6 +112,7 @@ class SchedulerManager:
                 coalesce=True
             )
             print("Scheduled dashboard cache refresh every 5 minutes")
+
     def refresh_dashboard_cache(self):
         """Worker to refresh global dashboard cache"""
         try:
@@ -115,6 +122,113 @@ class SchedulerManager:
             print("Dashboard cache refreshed.")
         except Exception as e:
             print(f"Error refreshing dashboard cache: {e}")
+
+    def add_daily_snapshot_job(self):
+        """Schedule daily portfolio snapshot creation at 17:00 (after market close)"""
+        job_id = "daily_portfolio_snapshots"
+        if not self.scheduler.get_job(job_id):
+            self.scheduler.add_job(
+                self.create_all_portfolio_snapshots,
+                trigger=CronTrigger(hour=23, minute=0),
+                id=job_id,
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True
+            )
+            print("Scheduled daily portfolio snapshots at 17:00")
+
+    def create_all_portfolio_snapshots(self):
+        """Create snapshots for all portfolios (called by scheduler)"""
+        # Check if today is a trading day
+        if not trading_calendar.is_trading_day():
+            print("Skipping portfolio snapshots - not a trading day")
+            return
+
+        print("Creating daily portfolio snapshots...")
+        portfolios = get_all_portfolios()
+        snapshot_date = date.today().strftime('%Y-%m-%d')
+        created_count = 0
+        error_count = 0
+
+        for portfolio in portfolios:
+            try:
+                portfolio_id = portfolio['id']
+                user_id = portfolio['user_id']
+
+                positions = get_portfolio_positions(portfolio_id, user_id)
+                if not positions:
+                    continue
+
+                # Calculate portfolio value using current prices
+                total_value = 0
+                total_cost = 0
+
+                for pos in positions:
+                    shares = float(pos.get('total_shares', 0))
+                    avg_cost = float(pos.get('average_cost', 0))
+                    current_price = pos.get('current_price')
+
+                    if current_price:
+                        total_value += shares * float(current_price)
+                    else:
+                        # Fetch current price
+                        price = self._get_current_price(pos.get('asset_code'), pos.get('asset_type'))
+                        total_value += shares * (price or avg_cost)
+
+                    total_cost += shares * avg_cost
+
+                if total_value <= 0:
+                    continue
+
+                cumulative_pnl = total_value - total_cost
+                cumulative_pnl_pct = ((total_value / total_cost) - 1) * 100 if total_cost > 0 else 0
+
+                # Calculate daily P&L
+                daily_pnl = 0
+                daily_pnl_pct = 0
+                prev_snapshot = get_latest_snapshot(portfolio_id)
+                if prev_snapshot and prev_snapshot['snapshot_date'] != snapshot_date:
+                    prev_value = float(prev_snapshot.get('total_value', 0))
+                    if prev_value > 0:
+                        daily_pnl = total_value - prev_value
+                        daily_pnl_pct = (daily_pnl / prev_value) * 100
+
+                snapshot_data = {
+                    'snapshot_date': snapshot_date,
+                    'total_value': round(total_value, 2),
+                    'total_cost': round(total_cost, 2),
+                    'daily_pnl': round(daily_pnl, 2),
+                    'daily_pnl_pct': round(daily_pnl_pct, 2),
+                    'cumulative_pnl': round(cumulative_pnl, 2),
+                    'cumulative_pnl_pct': round(cumulative_pnl_pct, 2),
+                    'allocation': {},
+                }
+
+                save_portfolio_snapshot(snapshot_data, portfolio_id)
+                created_count += 1
+
+            except Exception as e:
+                error_count += 1
+                logger.error(f"Error creating snapshot for portfolio {portfolio.get('id')}: {e}")
+
+        print(f"Portfolio snapshots completed: {created_count} created, {error_count} errors")
+
+    def _get_current_price(self, asset_code: str, asset_type: str) -> Optional[float]:
+        """Get current price for an asset"""
+        try:
+            if asset_type == 'fund':
+                from src.data_sources.akshare_api import get_fund_nav
+                nav = get_fund_nav(asset_code)
+                return float(nav) if nav else None
+            else:
+                from src.data_sources.akshare_api import get_stock_realtime_quote
+                quote = get_stock_realtime_quote(asset_code)
+                if quote and 'price' in quote:
+                    return float(quote['price'])
+                return None
+        except Exception as e:
+            logger.warning(f"Failed to get price for {asset_code}: {e}")
+            return None
 
     def add_fund_jobs(self, fund: Dict):
         """Add Pre/Post market jobs for a single fund"""

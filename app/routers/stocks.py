@@ -37,7 +37,10 @@ async def get_stocks_endpoint(current_user: User = Depends(get_current_user)):
         if not stocks:
             return []
 
-        # Batch fetch realtime quotes using tushare (more reliable than akshare)
+        # Try tushare first, then fall back to akshare
+        quotes_lookup = {}
+        use_akshare_fallback = False
+
         try:
             from src.data_sources.tushare_client import get_realtime_quotes
 
@@ -48,7 +51,6 @@ async def get_stocks_endpoint(current_user: User = Depends(get_current_user)):
             quotes_df = await asyncio.to_thread(get_realtime_quotes, stock_codes)
 
             # Build a lookup dict for quick access
-            quotes_lookup = {}
             if quotes_df is not None and not quotes_df.empty:
                 for _, row in quotes_df.iterrows():
                     # The ts_code might have suffix, extract plain code
@@ -56,56 +58,39 @@ async def get_stocks_endpoint(current_user: User = Depends(get_current_user)):
                     plain_code = ts_code.split('.')[0] if '.' in ts_code else ts_code
                     quotes_lookup[plain_code] = row
 
-            # Merge quotes with stock data
-            results = []
-            for stock in stocks:
-                item = dict(stock)
-                code = stock['code']
-
-                if code in quotes_lookup:
-                    row = quotes_lookup[code]
-                    # Map tushare fields to our schema
-                    price = row.get('price')
-                    pct_chg = row.get('pct_chg')
-                    vol = row.get('vol')
-
-                    if price is not None and pd.notna(price):
-                        item['price'] = float(price)
-                    if pct_chg is not None and pd.notna(pct_chg):
-                        item['change_pct'] = float(pct_chg)
-                    if vol is not None and pd.notna(vol):
-                        # tushare vol is in shares, convert to hands (100 shares = 1 hand)
-                        item['volume'] = float(vol)
-
-                results.append(StockItem(**item))
-
-            return results
+            # If tushare returned no data, use akshare fallback
+            if not quotes_lookup:
+                use_akshare_fallback = True
 
         except ImportError:
-            # Fallback to old akshare method if tushare not available
-            print("TuShare not available, falling back to akshare")
+            # TuShare not installed, use akshare
+            use_akshare_fallback = True
+        except BaseException:
+            # TuShare has known issues, silently fall back to akshare
+            use_akshare_fallback = True
 
+        # Use akshare fallback if needed
+        if use_akshare_fallback:
             def fetch_single_quote(stock):
                 item = dict(stock)
                 try:
-                    df = ak.stock_bid_ask_em(symbol=stock['code'])
-                    if not df.empty:
-                        info = dict(zip(df['item'], df['value']))
-                        price = info.get('最新') or info.get('最新价')
-                        change = info.get('涨幅') or info.get('涨跌幅')
-                        vol = info.get('总手') or info.get('成交量')
+                    # Use our existing akshare wrapper function
+                    quote = get_stock_realtime_quote(stock['code'])
+                    if quote:
+                        price = quote.get('最新价')
+                        change_pct = quote.get('涨跌幅')
+                        volume = quote.get('成交量')
 
-                        if price is not None and str(price) != '':
+                        if price is not None:
                             item['price'] = float(price)
-                        if change is not None and str(change) != '':
-                            item['change_pct'] = float(change)
-                        if vol is not None and str(vol) != '':
-                            v = float(vol)
-                            if info.get('总手') is not None:
-                                v = v * 100
-                            item['volume'] = v
-                except Exception:
-                    pass
+                        if change_pct is not None:
+                            item['change_pct'] = float(change_pct)
+                        if volume is not None:
+                            item['volume'] = float(volume)
+                except Exception as e:
+                    print(f"Error fetching quote for {stock['code']}: {e}")
+                    import traceback
+                    traceback.print_exc()
                 return StockItem(**item)
 
             loop = asyncio.get_event_loop()
@@ -114,12 +99,30 @@ async def get_stocks_endpoint(current_user: User = Depends(get_current_user)):
 
             return results
 
-        except Exception as e:
-            print(f"Error fetching realtime quotes: {e}")
-            import traceback
-            traceback.print_exc()
-            # Return stocks without realtime data
-            return [StockItem(**dict(s)) for s in stocks]
+        # Use tushare data
+        results = []
+        for stock in stocks:
+            item = dict(stock)
+            code = stock['code']
+
+            if code in quotes_lookup:
+                row = quotes_lookup[code]
+                # Map tushare fields to our schema
+                price = row.get('price')
+                pct_chg = row.get('pct_chg')
+                vol = row.get('vol')
+
+                if price is not None and pd.notna(price):
+                    item['price'] = float(price)
+                if pct_chg is not None and pd.notna(pct_chg):
+                    item['change_pct'] = float(pct_chg)
+                if vol is not None and pd.notna(vol):
+                    # tushare vol is in shares, keep as is
+                    item['volume'] = float(vol)
+
+            results.append(StockItem(**item))
+
+        return results
 
     except Exception as e:
         print(f"Error reading stocks: {e}")

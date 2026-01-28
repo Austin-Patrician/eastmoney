@@ -365,36 +365,6 @@ def init_db():
     c.execute('CREATE INDEX IF NOT EXISTS idx_alerts_user ON portfolio_alerts(user_id)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_alerts_unread ON portfolio_alerts(user_id, is_read)')
 
-    # 21. Create DIP Plans Table (定投计划)
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS dip_plans (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            portfolio_id INTEGER NOT NULL REFERENCES portfolios(id),
-            user_id INTEGER NOT NULL REFERENCES users(id),
-            asset_type TEXT NOT NULL CHECK(asset_type IN ('stock', 'fund')),
-            asset_code TEXT NOT NULL,
-            asset_name TEXT,
-            amount_per_period REAL NOT NULL,
-            frequency TEXT NOT NULL CHECK(frequency IN ('daily', 'weekly', 'biweekly', 'monthly')),
-            execution_day INTEGER,
-            start_date DATE NOT NULL,
-            end_date DATE,
-            is_active BOOLEAN DEFAULT 1,
-            total_invested REAL DEFAULT 0,
-            total_shares REAL DEFAULT 0,
-            execution_count INTEGER DEFAULT 0,
-            last_executed_at TIMESTAMP,
-            next_execution_date DATE,
-            notes TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-
-    # Create indexes for DIP plans
-    c.execute('CREATE INDEX IF NOT EXISTS idx_dip_plans_portfolio ON dip_plans(portfolio_id)')
-    c.execute('CREATE INDEX IF NOT EXISTS idx_dip_plans_user ON dip_plans(user_id)')
-    c.execute('CREATE INDEX IF NOT EXISTS idx_dip_plans_next ON dip_plans(next_execution_date)')
 
     # 3. Migration: Add user_id to funds if not exists
     try:
@@ -1816,6 +1786,16 @@ def get_user_portfolios(user_id: int) -> List[Dict]:
     return [dict(row) for row in rows]
 
 
+def get_all_portfolios() -> List[Dict]:
+    """Get all portfolios from all users (for scheduled tasks)."""
+    conn = get_db_connection()
+    rows = conn.execute(
+        '''SELECT * FROM portfolios ORDER BY user_id, is_default DESC'''
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
 def get_portfolio_by_id(portfolio_id: int, user_id: int = None) -> Optional[Dict]:
     """Get a portfolio by ID, optionally verifying ownership."""
     conn = get_db_connection()
@@ -1951,7 +1931,6 @@ def delete_portfolio(portfolio_id: int, user_id: int) -> bool:
         return False
 
     # Delete related data in order
-    c.execute('DELETE FROM dip_plans WHERE portfolio_id = ?', (portfolio_id,))
     c.execute('DELETE FROM portfolio_alerts WHERE portfolio_id = ?', (portfolio_id,))
     c.execute('DELETE FROM portfolio_snapshots WHERE portfolio_id = ?', (portfolio_id,))
     c.execute('DELETE FROM transactions WHERE portfolio_id = ?', (portfolio_id,))
@@ -2148,6 +2127,55 @@ def update_position_price(position_id: int, current_price: float, current_value:
 
     conn.commit()
     conn.close()
+
+
+def update_unified_position(position_id: int, user_id: int, updates: Dict) -> bool:
+    """Update a unified position's editable fields (shares, cost, notes, etc.)."""
+    if not updates:
+        return False
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Verify ownership
+    position = c.execute(
+        'SELECT id, total_shares, average_cost FROM positions WHERE id = ? AND user_id = ?',
+        (position_id, user_id)
+    ).fetchone()
+
+    if not position:
+        conn.close()
+        return False
+
+    # Build dynamic update query
+    allowed_fields = ['asset_name', 'total_shares', 'average_cost', 'sector', 'notes']
+    set_clauses = []
+    params = []
+
+    for field in allowed_fields:
+        if field in updates and updates[field] is not None:
+            set_clauses.append(f'{field} = ?')
+            params.append(updates[field])
+
+    if not set_clauses:
+        conn.close()
+        return False
+
+    # Recalculate derived fields if shares or cost changed
+    total_shares = updates.get('total_shares', position['total_shares'])
+    average_cost = updates.get('average_cost', position['average_cost'])
+    total_cost = total_shares * average_cost
+
+    set_clauses.extend(['total_cost = ?', 'updated_at = CURRENT_TIMESTAMP'])
+    params.append(total_cost)
+    params.append(position_id)
+
+    query = f"UPDATE positions SET {', '.join(set_clauses)} WHERE id = ?"
+    c.execute(query, tuple(params))
+
+    conn.commit()
+    conn.close()
+    return True
 
 
 def delete_unified_position(position_id: int, user_id: int) -> bool:
@@ -2681,289 +2709,6 @@ def get_unread_alert_count(user_id: int) -> int:
     ).fetchone()[0]
     conn.close()
     return count
-
-
-# =============================================================================
-# DIP Plan Operations (定投计划)
-# =============================================================================
-
-def get_portfolio_dip_plans(portfolio_id: int, user_id: int = None, active_only: bool = False) -> List[Dict]:
-    """Get all DIP plans for a portfolio."""
-    conn = get_db_connection()
-
-    sql = 'SELECT * FROM dip_plans WHERE portfolio_id = ?'
-    params = [portfolio_id]
-
-    if user_id:
-        sql += ' AND user_id = ?'
-        params.append(user_id)
-
-    if active_only:
-        sql += ' AND is_active = 1'
-
-    sql += ' ORDER BY created_at DESC'
-
-    rows = conn.execute(sql, tuple(params)).fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
-
-
-def get_dip_plan_by_id(plan_id: int, user_id: int = None) -> Optional[Dict]:
-    """Get a DIP plan by ID."""
-    conn = get_db_connection()
-
-    sql = 'SELECT * FROM dip_plans WHERE id = ?'
-    params = [plan_id]
-
-    if user_id:
-        sql += ' AND user_id = ?'
-        params.append(user_id)
-
-    row = conn.execute(sql, tuple(params)).fetchone()
-    conn.close()
-    return dict(row) if row else None
-
-
-def create_dip_plan(plan_data: Dict, portfolio_id: int, user_id: int) -> int:
-    """Create a new DIP plan."""
-    if not user_id or not portfolio_id:
-        raise ValueError("user_id and portfolio_id are required")
-
-    conn = get_db_connection()
-    c = conn.cursor()
-
-    # Calculate next execution date
-    from datetime import datetime, timedelta
-    start_date = datetime.strptime(plan_data['start_date'], '%Y-%m-%d')
-    next_execution = _calculate_next_execution(
-        start_date,
-        plan_data['frequency'],
-        plan_data.get('execution_day')
-    )
-
-    c.execute('''
-        INSERT INTO dip_plans (
-            portfolio_id, user_id, asset_type, asset_code, asset_name,
-            amount_per_period, frequency, execution_day, start_date, end_date,
-            is_active, next_execution_date, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        portfolio_id,
-        user_id,
-        plan_data['asset_type'],
-        plan_data['asset_code'],
-        plan_data.get('asset_name'),
-        plan_data['amount_per_period'],
-        plan_data['frequency'],
-        plan_data.get('execution_day'),
-        plan_data['start_date'],
-        plan_data.get('end_date'),
-        plan_data.get('is_active', 1),
-        next_execution.strftime('%Y-%m-%d') if next_execution else None,
-        plan_data.get('notes')
-    ))
-
-    plan_id = c.lastrowid
-    conn.commit()
-    conn.close()
-    return plan_id
-
-
-def update_dip_plan(plan_id: int, user_id: int, updates: Dict) -> bool:
-    """Update a DIP plan."""
-    conn = get_db_connection()
-    c = conn.cursor()
-
-    # Verify ownership
-    exists = c.execute(
-        'SELECT id FROM dip_plans WHERE id = ? AND user_id = ?',
-        (plan_id, user_id)
-    ).fetchone()
-
-    if not exists:
-        conn.close()
-        return False
-
-    set_clauses = []
-    params = []
-
-    allowed_fields = ['asset_name', 'amount_per_period', 'frequency', 'execution_day',
-                      'end_date', 'is_active', 'notes']
-    for field in allowed_fields:
-        if field in updates:
-            set_clauses.append(f'{field} = ?')
-            params.append(updates[field])
-
-    if set_clauses:
-        set_clauses.append('updated_at = CURRENT_TIMESTAMP')
-        params.extend([plan_id, user_id])
-
-        sql = f"UPDATE dip_plans SET {', '.join(set_clauses)} WHERE id = ? AND user_id = ?"
-        c.execute(sql, tuple(params))
-
-    conn.commit()
-    conn.close()
-    return True
-
-
-def delete_dip_plan(plan_id: int, user_id: int) -> bool:
-    """Delete a DIP plan."""
-    conn = get_db_connection()
-    c = conn.cursor()
-
-    # Verify ownership
-    exists = c.execute(
-        'SELECT id FROM dip_plans WHERE id = ? AND user_id = ?',
-        (plan_id, user_id)
-    ).fetchone()
-
-    if not exists:
-        conn.close()
-        return False
-
-    c.execute('DELETE FROM dip_plans WHERE id = ?', (plan_id,))
-    conn.commit()
-    conn.close()
-    return True
-
-
-def execute_dip_plan(plan_id: int, user_id: int, execution_price: float) -> Optional[int]:
-    """Execute a DIP plan - create a transaction and update plan."""
-    conn = get_db_connection()
-    c = conn.cursor()
-
-    # Get plan
-    plan = c.execute(
-        'SELECT * FROM dip_plans WHERE id = ? AND user_id = ? AND is_active = 1',
-        (plan_id, user_id)
-    ).fetchone()
-
-    if not plan:
-        conn.close()
-        return None
-
-    plan = dict(plan)
-
-    # Calculate shares to buy
-    shares = plan['amount_per_period'] / execution_price
-
-    # Create transaction
-    from datetime import datetime
-    tx_data = {
-        'asset_type': plan['asset_type'],
-        'asset_code': plan['asset_code'],
-        'asset_name': plan['asset_name'],
-        'transaction_type': 'buy',
-        'shares': shares,
-        'price': execution_price,
-        'total_amount': plan['amount_per_period'],
-        'transaction_date': datetime.now().strftime('%Y-%m-%d'),
-        'notes': f'定投计划自动执行 (Plan ID: {plan_id})'
-    }
-
-    # Note: We need to create the transaction outside this function to avoid nested commits
-    # For now, let's update the plan stats
-
-    new_total_invested = plan['total_invested'] + plan['amount_per_period']
-    new_total_shares = plan['total_shares'] + shares
-    new_execution_count = plan['execution_count'] + 1
-
-    # Calculate next execution
-    next_execution = _calculate_next_execution(
-        datetime.now(),
-        plan['frequency'],
-        plan['execution_day']
-    )
-
-    # Check if plan should end
-    is_active = 1
-    if plan['end_date']:
-        end_date = datetime.strptime(plan['end_date'], '%Y-%m-%d')
-        if next_execution and next_execution > end_date:
-            is_active = 0
-            next_execution = None
-
-    c.execute('''
-        UPDATE dip_plans SET
-            total_invested = ?,
-            total_shares = ?,
-            execution_count = ?,
-            last_executed_at = CURRENT_TIMESTAMP,
-            next_execution_date = ?,
-            is_active = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-    ''', (
-        new_total_invested,
-        new_total_shares,
-        new_execution_count,
-        next_execution.strftime('%Y-%m-%d') if next_execution else None,
-        is_active,
-        plan_id
-    ))
-
-    conn.commit()
-    conn.close()
-
-    # Return the transaction data for the caller to create
-    return tx_data
-
-
-def get_pending_dip_plans(date: str = None) -> List[Dict]:
-    """Get all DIP plans that should be executed on a given date."""
-    if not date:
-        from datetime import datetime
-        date = datetime.now().strftime('%Y-%m-%d')
-
-    conn = get_db_connection()
-    rows = conn.execute('''
-        SELECT * FROM dip_plans
-        WHERE is_active = 1 AND next_execution_date <= ?
-    ''', (date,)).fetchall()
-    conn.close()
-
-    return [dict(row) for row in rows]
-
-
-def _calculate_next_execution(current_date, frequency: str, execution_day: int = None):
-    """Calculate the next execution date for a DIP plan."""
-    from datetime import datetime, timedelta
-
-    if isinstance(current_date, str):
-        current_date = datetime.strptime(current_date, '%Y-%m-%d')
-
-    if frequency == 'daily':
-        return current_date + timedelta(days=1)
-
-    elif frequency == 'weekly':
-        # Next week, same day or specified day
-        days_ahead = 7
-        if execution_day is not None:
-            days_ahead = (execution_day - current_date.weekday()) % 7
-            if days_ahead == 0:
-                days_ahead = 7
-        return current_date + timedelta(days=days_ahead)
-
-    elif frequency == 'biweekly':
-        return current_date + timedelta(days=14)
-
-    elif frequency == 'monthly':
-        # Next month, same day or specified day
-        year = current_date.year
-        month = current_date.month + 1
-        if month > 12:
-            month = 1
-            year += 1
-
-        day = execution_day if execution_day else current_date.day
-        # Handle months with fewer days
-        import calendar
-        max_day = calendar.monthrange(year, month)[1]
-        day = min(day, max_day)
-
-        return datetime(year, month, day)
-
-    return None
 
 
 # =============================================================================

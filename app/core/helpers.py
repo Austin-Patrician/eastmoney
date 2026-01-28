@@ -8,6 +8,7 @@ import pandas as pd
 import akshare as ak
 
 from src.data_sources.akshare_api import get_all_fund_list, get_stock_realtime_quote, get_stock_history
+from src.data_sources.data_source_manager import get_fund_info_from_tushare
 
 
 def get_fund_nav_history(fund_code: str, days: int = 100) -> List[Dict]:
@@ -22,22 +23,26 @@ def get_fund_nav_history(fund_code: str, days: int = 100) -> List[Dict]:
         List of dicts with 'date' and 'value' keys
     """
     try:
-        df = ak.fund_open_fund_info_em(symbol=fund_code, indicator="单位净值走势")
+        # Use TuShare via data_source_manager
+        df = get_fund_info_from_tushare(fund_code)
+        
         if df is None or df.empty:
             return []
 
-        # Normalize column names
-        if '净值日期' not in df.columns:
-            cols = list(df.columns)
-            if len(cols) >= 2:
-                df = df.rename(columns={cols[0]: '净值日期', cols[1]: '单位净值'})
+        # Data from data_source_manager already has standard columns:
+        # '净值日期' (YYYYMMDD string), '单位净值' (float)
 
         if '净值日期' not in df.columns or '单位净值' not in df.columns:
             return []
 
         df['净值日期'] = pd.to_datetime(df['净值日期'], errors='coerce')
         df = df.dropna(subset=['净值日期', '单位净值'])
-        df = df.sort_values('净值日期').tail(days)
+        
+        # Sort by date ascending to get chronological order
+        df = df.sort_values('净值日期')
+        
+        # Take the last 'days' entries
+        df = df.tail(days)
 
         return [
             {'date': row['净值日期'].strftime('%Y-%m-%d'), 'value': float(row['单位净值'])}

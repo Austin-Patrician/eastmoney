@@ -213,7 +213,8 @@ const DailyReturnsDetail: React.FC<DailyReturnsDetailProps> = ({
   const renderContributionBar = (position: DailyPositionReturn) => {
     const maxContrib = Math.max(...data.positions.map(p => Math.abs(p.contribution_pct)));
     const width = maxContrib > 0 ? (Math.abs(position.contribution_pct) / maxContrib) * 100 : 0;
-    const color = position.position_pnl >= 0 ? theme.palette.success.main : theme.palette.error.main;
+    const pnl = position.position_pnl ?? 0;
+    const color = pnl >= 0 ? theme.palette.success.main : theme.palette.error.main;
 
     return (
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 120 }}>
@@ -230,7 +231,7 @@ const DailyReturnsDetail: React.FC<DailyReturnsDetailProps> = ({
           variant="caption"
           sx={{
             fontFamily: 'JetBrains Mono, monospace',
-            color: position.position_pnl >= 0 ? 'success.main' : 'error.main',
+            color: pnl >= 0 ? 'success.main' : 'error.main',
           }}
         >
           {position.contribution_pct.toFixed(1)}%
@@ -395,13 +396,15 @@ const DailyReturnsDetail: React.FC<DailyReturnsDetailProps> = ({
           <Box sx={{ width: '100%', height: '100%' }}>
             <ResponsiveContainer width="100%" height="100%">
               <Treemap
-                data={data.positions.map(p => ({
-                  name: p.asset_name,
-                  code: p.asset_code,
-                  size: Math.abs(p.position_pnl) || 0.01,
-                  returnPct: p.nav_change_pct,
-                  pnl: p.position_pnl,
-                }))}
+                data={data.positions
+                  .filter(p => !p.is_pending && p.position_pnl != null)
+                  .map(p => ({
+                    name: p.asset_name,
+                    code: p.asset_code,
+                    size: Math.abs(p.position_pnl!) || 0.01,
+                    returnPct: p.nav_change_pct ?? 0,
+                    pnl: p.position_pnl,
+                  }))}
                 dataKey="size"
                 stroke="#fff"
               content={<TreemapContent />}
@@ -508,6 +511,9 @@ const DailyReturnsDetail: React.FC<DailyReturnsDetailProps> = ({
                 hover
                 sx={{
                   '&:last-child td, &:last-child th': { border: 0 },
+                  ...(position.is_pending && {
+                    bgcolor: alpha(theme.palette.warning.main, 0.03),
+                  }),
                 }}
               >
                 <TableCell>
@@ -529,40 +535,66 @@ const DailyReturnsDetail: React.FC<DailyReturnsDetailProps> = ({
                 </TableCell>
                 <TableCell align="right">
                   <Typography variant="body2" sx={{ fontFamily: 'JetBrains Mono, monospace' }}>
-                    ¥{position.yesterday_nav.toFixed(4)}
+                    {position.yesterday_nav != null ? `¥${position.yesterday_nav.toFixed(4)}` : '--'}
                   </Typography>
                 </TableCell>
                 <TableCell align="right">
-                  <Typography variant="body2" sx={{ fontFamily: 'JetBrains Mono, monospace' }}>
-                    ¥{position.today_nav.toFixed(4)}
-                  </Typography>
+                  {position.is_pending ? (
+                    <Chip
+                      size="small"
+                      label={t('portfolio.pendingUpdate', '待更新')}
+                      sx={{
+                        height: 20,
+                        fontSize: '0.7rem',
+                        bgcolor: alpha(theme.palette.warning.main, 0.1),
+                        color: 'warning.main',
+                        fontWeight: 500,
+                      }}
+                    />
+                  ) : (
+                    <Typography variant="body2" sx={{ fontFamily: 'JetBrains Mono, monospace' }}>
+                      {position.today_nav != null ? `¥${position.today_nav.toFixed(4)}` : '--'}
+                    </Typography>
+                  )}
                 </TableCell>
                 <TableCell align="right">
-                  <Typography
-                    variant="body2"
-                    sx={{
-                      fontFamily: 'JetBrains Mono, monospace',
-                      fontWeight: 600,
-                      color: position.nav_change_pct >= 0 ? 'success.main' : 'error.main',
-                    }}
-                  >
-                    {position.nav_change_pct >= 0 ? '+' : ''}{position.nav_change_pct.toFixed(2)}%
-                  </Typography>
+                  {position.is_pending || position.nav_change_pct == null ? (
+                    <Typography variant="body2" color="text.disabled">--</Typography>
+                  ) : (
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        fontFamily: 'JetBrains Mono, monospace',
+                        fontWeight: 600,
+                        color: position.nav_change_pct >= 0 ? 'success.main' : 'error.main',
+                      }}
+                    >
+                      {position.nav_change_pct >= 0 ? '+' : ''}{position.nav_change_pct.toFixed(2)}%
+                    </Typography>
+                  )}
                 </TableCell>
                 <TableCell align="right">
-                  <Typography
-                    variant="body2"
-                    sx={{
-                      fontFamily: 'JetBrains Mono, monospace',
-                      fontWeight: 600,
-                      color: position.position_pnl >= 0 ? 'success.main' : 'error.main',
-                    }}
-                  >
-                    {position.position_pnl >= 0 ? '+' : ''}¥{position.position_pnl.toFixed(2)}
-                  </Typography>
+                  {position.is_pending || position.position_pnl == null ? (
+                    <Typography variant="body2" color="text.disabled">--</Typography>
+                  ) : (
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        fontFamily: 'JetBrains Mono, monospace',
+                        fontWeight: 600,
+                        color: position.position_pnl >= 0 ? 'success.main' : 'error.main',
+                      }}
+                    >
+                      {position.position_pnl >= 0 ? '+' : ''}¥{position.position_pnl.toFixed(2)}
+                    </Typography>
+                  )}
                 </TableCell>
                 <TableCell>
-                  {renderContributionBar(position)}
+                  {position.is_pending ? (
+                    <Typography variant="body2" color="text.disabled">--</Typography>
+                  ) : (
+                    renderContributionBar(position)
+                  )}
                 </TableCell>
                 <TableCell align="right">
                   <Typography variant="body2" sx={{ fontFamily: 'JetBrains Mono, monospace' }}>

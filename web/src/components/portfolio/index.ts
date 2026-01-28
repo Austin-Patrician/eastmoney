@@ -10,9 +10,6 @@ export { default as AssetSearchDialog } from './AssetSearchDialog';
 export { default as PortfolioDiagnosisCard } from './PortfolioDiagnosisCard';
 export { default as RebalanceSuggestions } from './RebalanceSuggestions';
 export { default as AlertBanner } from './AlertBanner';
-export { default as DIPPlanCard } from './DIPPlanCard';
-export { default as DIPPlanForm } from './DIPPlanForm';
-export type { DIPPlanFormData } from './DIPPlanForm';
 
 // New Institutional-Grade Portfolio Components
 export { default as AnimatedNumber } from './AnimatedNumber';
@@ -26,6 +23,7 @@ export { default as CorrelationHeatmap } from './CorrelationHeatmap';
 export { default as AISignalCell } from './AISignalCell';
 export { default as AISignalDrawer } from './AISignalDrawer';
 export { default as SmartPositionTable } from './SmartPositionTable';
+export { default as EditPositionDialog } from './EditPositionDialog';
 
 // Returns Analysis Components
 export { default as ReturnsOverview } from './ReturnsOverview';

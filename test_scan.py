@@ -24,6 +24,8 @@ def raw_tushare_scan():
     
     pro = ts.pro_api(TUSHARE_API_TOKEN)
     
+
+    print("Testing moneyflow_hsgt for specific dates...")
     # Try a few dates in 2024
     dates = [ '20260122']
 
@@ -35,23 +37,28 @@ def raw_tushare_scan():
             return {}
 
         # Get data for a range ending at the latest trade date
-    end_date = trade_date
-        # Calculate start_date as 7 days before end_date
-    from datetime import datetime, timedelta
-    end_dt = datetime.strptime(end_date, '%Y%m%d')
-    start_date = (end_dt - timedelta(days=10)).strftime('%Y%m%d')
+    # Query both Shanghai (1) and Shenzhen (3) Stock Connect
+    df_list = []
 
-
-    df = tushare_client.get_moneyflow_hsgt(
-            start_date=start_date,
-            end_date=end_date
+    print(f"Fetching Stock Connect data for trade date: {trade_date}")
+        # 1. Shanghai Stock Connect (沪股通)
+    try:
+        df_sh = tushare_client.tushare_call_with_retry(
+                'hsgt_top10',
+                trade_date=trade_date,
+                market_type='1'
         )
+        if df_sh is not None and not df_sh.empty:
+                print("Fetched Shanghai Connect flow",df_sh)
+                df_list.append(df_sh)
+    except Exception as e:
+            print(f"Failed to fetch Shanghai Connect flow: {e}")
 
-    print("DataFrame fetched:")
-    print(df)
-
-    if df is None or df.empty:
+    if not df_list:
             return {}
+    
+
+    
 
         # Get latest day
     latest = df.sort_values('trade_date', ascending=False).iloc[0]

@@ -2,7 +2,7 @@
 Portfolio management endpoints - the largest router with CRUD, analysis, AI, stress testing, and DIP plans.
 """
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 from fastapi import APIRouter, HTTPException, Depends, Body
 
@@ -28,12 +28,9 @@ from src.storage.db import (
     get_user_positions, create_position, update_position, delete_position,
     # Unified positions
     get_portfolio_positions, upsert_position, delete_unified_position,
-    get_unified_position_by_id, recalculate_position,
+    get_unified_position_by_id, recalculate_position, update_unified_position,
     # Transactions
     get_portfolio_transactions, create_transaction, delete_transaction,
-    # DIP Plans
-    get_portfolio_dip_plans, get_dip_plan_by_id, create_dip_plan,
-    update_dip_plan, delete_dip_plan, execute_dip_plan,
     # Alerts
     get_portfolio_alerts, get_unread_alert_count, mark_alert_read, dismiss_alert,
     # Snapshots & Migration
@@ -52,6 +49,29 @@ from src.llm.client import get_llm_client
 from src.services.assistant_service import assistant_service
 
 router = APIRouter(tags=["Portfolios"])
+
+
+def parse_snapshot_date(date_val) -> datetime:
+    """Parse snapshot date which may be in various formats (YYYY-MM-DD, YYYYMMDD, or int)."""
+    date_str = str(date_val)
+    # Try YYYY-MM-DD format first
+    if '-' in date_str:
+        return datetime.strptime(date_str, '%Y-%m-%d')
+    # Try YYYYMMDD format (8 digits)
+    if len(date_str) == 8 and date_str.isdigit():
+        return datetime.strptime(date_str, '%Y%m%d')
+    # Fallback: try to parse as is
+    return datetime.strptime(date_str, '%Y-%m-%d')
+
+
+def normalize_date_str(date_val) -> str:
+    """Normalize date value to YYYY-MM-DD string format."""
+    date_str = str(date_val)
+    if '-' in date_str:
+        return date_str
+    if len(date_str) == 8 and date_str.isdigit():
+        return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+    return date_str
 
 
 # ====================================================================
@@ -414,6 +434,35 @@ async def create_portfolio_position(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.put("/api/portfolios/{portfolio_id}/positions/{position_id}")
+async def update_portfolio_position(
+    portfolio_id: int,
+    position_id: int,
+    updates: UnifiedPositionUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    """Update a position's shares, cost, or other editable fields."""
+    try:
+        portfolio = get_portfolio_by_id(portfolio_id, current_user.id)
+        if not portfolio:
+            raise HTTPException(status_code=404, detail="Portfolio not found")
+
+        update_dict = {k: v for k, v in updates.dict().items() if v is not None}
+        if not update_dict:
+            raise HTTPException(status_code=400, detail="No updates provided")
+
+        success = update_unified_position(position_id, current_user.id, update_dict)
+        if not success:
+            raise HTTPException(status_code=404, detail="Position not found")
+
+        return {"message": "Position updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error updating position: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/api/portfolios/{portfolio_id}/positions/{position_id}")
 async def delete_portfolio_position(
     portfolio_id: int,
@@ -752,180 +801,6 @@ async def get_portfolio_alerts_api(
         print(f"Error getting alerts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# ====================================================================
-# DIP (定投) Plans API
-# ====================================================================
-
-@router.get("/api/portfolios/{portfolio_id}/dip-plans")
-async def get_dip_plans_api(
-    portfolio_id: int,
-    active_only: bool = False,
-    current_user: User = Depends(get_current_user)
-):
-    """Get all DIP plans for a portfolio."""
-    try:
-        portfolio = get_portfolio_by_id(portfolio_id, current_user.id)
-        if not portfolio:
-            raise HTTPException(status_code=404, detail="Portfolio not found")
-
-        plans = get_portfolio_dip_plans(portfolio_id, current_user.id, active_only)
-        return {"dip_plans": plans, "portfolio": portfolio}
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error getting DIP plans: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/api/portfolios/{portfolio_id}/dip-plans")
-async def create_dip_plan_api(
-    portfolio_id: int,
-    plan: DIPPlanCreate,
-    current_user: User = Depends(get_current_user)
-):
-    """Create a new DIP plan."""
-    try:
-        portfolio = get_portfolio_by_id(portfolio_id, current_user.id)
-        if not portfolio:
-            raise HTTPException(status_code=404, detail="Portfolio not found")
-
-        plan_id = create_dip_plan(plan.dict(), portfolio_id, current_user.id)
-        return {"id": plan_id, "message": "DIP plan created successfully"}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error creating DIP plan: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/api/portfolios/{portfolio_id}/dip-plans/{plan_id}")
-async def get_dip_plan_api(
-    portfolio_id: int,
-    plan_id: int,
-    current_user: User = Depends(get_current_user)
-):
-    """Get a specific DIP plan."""
-    try:
-        portfolio = get_portfolio_by_id(portfolio_id, current_user.id)
-        if not portfolio:
-            raise HTTPException(status_code=404, detail="Portfolio not found")
-
-        plan = get_dip_plan_by_id(plan_id, current_user.id)
-        if not plan:
-            raise HTTPException(status_code=404, detail="DIP plan not found")
-
-        return plan
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error getting DIP plan: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.put("/api/portfolios/{portfolio_id}/dip-plans/{plan_id}")
-async def update_dip_plan_api(
-    portfolio_id: int,
-    plan_id: int,
-    updates: DIPPlanUpdate,
-    current_user: User = Depends(get_current_user)
-):
-    """Update a DIP plan."""
-    try:
-        portfolio = get_portfolio_by_id(portfolio_id, current_user.id)
-        if not portfolio:
-            raise HTTPException(status_code=404, detail="Portfolio not found")
-
-        update_dict = {k: v for k, v in updates.dict().items() if v is not None}
-        if not update_dict:
-            raise HTTPException(status_code=400, detail="No updates provided")
-
-        success = update_dip_plan(plan_id, current_user.id, update_dict)
-        if not success:
-            raise HTTPException(status_code=404, detail="DIP plan not found")
-
-        return {"message": "DIP plan updated successfully"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error updating DIP plan: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/api/portfolios/{portfolio_id}/dip-plans/{plan_id}")
-async def delete_dip_plan_api(
-    portfolio_id: int,
-    plan_id: int,
-    current_user: User = Depends(get_current_user)
-):
-    """Delete a DIP plan."""
-    try:
-        portfolio = get_portfolio_by_id(portfolio_id, current_user.id)
-        if not portfolio:
-            raise HTTPException(status_code=404, detail="Portfolio not found")
-
-        success = delete_dip_plan(plan_id, current_user.id)
-        if not success:
-            raise HTTPException(status_code=404, detail="DIP plan not found")
-
-        return {"message": "DIP plan deleted successfully"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error deleting DIP plan: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/api/portfolios/{portfolio_id}/dip-plans/{plan_id}/execute")
-async def execute_dip_plan_api(
-    portfolio_id: int,
-    plan_id: int,
-    price: Optional[float] = None,
-    current_user: User = Depends(get_current_user)
-):
-    """Manually execute a DIP plan."""
-    try:
-        portfolio = get_portfolio_by_id(portfolio_id, current_user.id)
-        if not portfolio:
-            raise HTTPException(status_code=404, detail="Portfolio not found")
-
-        plan = get_dip_plan_by_id(plan_id, current_user.id)
-        if not plan:
-            raise HTTPException(status_code=404, detail="DIP plan not found")
-
-        if not price:
-            loop = asyncio.get_running_loop()
-            if plan['asset_type'] == 'fund':
-                nav_history = await loop.run_in_executor(None, get_fund_nav_history, plan['asset_code'], 5)
-                if nav_history:
-                    price = float(nav_history[-1]['value'])
-            else:
-                quote = await loop.run_in_executor(None, get_stock_realtime_quote, plan['asset_code'])
-                if quote and quote.get('price'):
-                    price = float(quote['price'])
-
-        if not price:
-            raise HTTPException(status_code=400, detail="Could not determine current price")
-
-        tx_data = execute_dip_plan(plan_id, current_user.id, price)
-        if not tx_data:
-            raise HTTPException(status_code=400, detail="Failed to execute DIP plan")
-
-        transaction_id = create_transaction(tx_data, portfolio_id, current_user.id)
-
-        return {
-            "message": "DIP plan executed successfully",
-            "transaction_id": transaction_id,
-            "shares": tx_data['shares'],
-            "price": price,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error executing DIP plan: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ====================================================================
@@ -1746,7 +1621,7 @@ async def get_returns_summary(
             }
 
         # Sort snapshots by date
-        snapshots = sorted(snapshots, key=lambda x: x['snapshot_date'])
+        snapshots = sorted(snapshots, key=lambda x: normalize_date_str(x['snapshot_date']))
 
         # Calculate daily returns
         daily_returns = []
@@ -1757,7 +1632,7 @@ async def get_returns_summary(
                 daily_pnl = curr_value - prev_value
                 daily_pnl_pct = (daily_pnl / prev_value) * 100
                 daily_returns.append({
-                    'date': snapshots[i]['snapshot_date'],
+                    'date': normalize_date_str(snapshots[i]['snapshot_date']),
                     'pnl': daily_pnl,
                     'pnl_pct': daily_pnl_pct,
                     'value': curr_value,
@@ -1775,8 +1650,8 @@ async def get_returns_summary(
 
         # Annualized return
         if len(snapshots) >= 2:
-            first_date = datetime.strptime(snapshots[0]['snapshot_date'], '%Y-%m-%d')
-            last_date = datetime.strptime(snapshots[-1]['snapshot_date'], '%Y-%m-%d')
+            first_date = parse_snapshot_date(snapshots[0]['snapshot_date'])
+            last_date = parse_snapshot_date(snapshots[-1]['snapshot_date'])
             days = (last_date - first_date).days
             if days > 0:
                 first_value = float(snapshots[0].get('total_value', 0))
@@ -1788,28 +1663,50 @@ async def get_returns_summary(
             annualized_return = 0
 
         # Today's P&L
-        today = datetime.now().strftime('%Y-%m-%d')
-        today_data = next((r for r in daily_returns if r['date'] == today), None)
+        today_dt = datetime.now()
+        today = today_dt.strftime('%Y-%m-%d')
+        today_data = next((r for r in daily_returns if normalize_date_str(r['date']) == today), None)
         today_pnl = today_data['pnl'] if today_data else 0
         today_pnl_pct = today_data['pnl_pct'] if today_data else 0
 
-        # Week P&L (last 5 trading days)
-        week_returns = daily_returns[-5:] if len(daily_returns) >= 5 else daily_returns
-        week_pnl = sum(r['pnl'] for r in week_returns)
-        if week_returns and len(daily_returns) > len(week_returns):
-            week_start_value = daily_returns[-len(week_returns)-1]['value'] if len(daily_returns) > len(week_returns) else total_cost
-            week_pnl_pct = (week_pnl / week_start_value * 100) if week_start_value > 0 else 0
-        else:
-            week_pnl_pct = 0
+        # Week P&L - Calculate from Monday of current week to today
+        # weekday() returns 0 for Monday, 6 for Sunday
+        days_since_monday = today_dt.weekday()
+        week_start_dt = today_dt - timedelta(days=days_since_monday)
+        week_start_str = week_start_dt.strftime('%Y-%m-%d')
 
-        # Month P&L (last 22 trading days)
-        month_returns = daily_returns[-22:] if len(daily_returns) >= 22 else daily_returns
+        # Filter daily returns for current week (from Monday onwards)
+        week_returns = [r for r in daily_returns if r['date'] >= week_start_str]
+        week_pnl = sum(r['pnl'] for r in week_returns)
+
+        # Find the last snapshot before the week start to get the base value
+        week_base_value = None
+        for snap in reversed(snapshots):
+            snap_date = normalize_date_str(snap['snapshot_date'])
+            if snap_date < week_start_str:
+                week_base_value = float(snap.get('total_value', 0))
+                break
+        if week_base_value is None and snapshots:
+            week_base_value = float(snapshots[0].get('total_value', 0))
+        week_pnl_pct = (week_pnl / week_base_value * 100) if week_base_value and week_base_value > 0 else 0
+
+        # Month P&L - Calculate from first day of current month to today
+        month_start_str = today_dt.strftime('%Y-%m-01')
+
+        # Filter daily returns for current month
+        month_returns = [r for r in daily_returns if r['date'] >= month_start_str]
         month_pnl = sum(r['pnl'] for r in month_returns)
-        if month_returns and len(daily_returns) > len(month_returns):
-            month_start_value = daily_returns[-len(month_returns)-1]['value'] if len(daily_returns) > len(month_returns) else total_cost
-            month_pnl_pct = (month_pnl / month_start_value * 100) if month_start_value > 0 else 0
-        else:
-            month_pnl_pct = 0
+
+        # Find the last snapshot before the month start to get the base value
+        month_base_value = None
+        for snap in reversed(snapshots):
+            snap_date = normalize_date_str(snap['snapshot_date'])
+            if snap_date < month_start_str:
+                month_base_value = float(snap.get('total_value', 0))
+                break
+        if month_base_value is None and snapshots:
+            month_base_value = float(snapshots[0].get('total_value', 0))
+        month_pnl_pct = (month_pnl / month_base_value * 100) if month_base_value and month_base_value > 0 else 0
 
         # Max drawdown
         max_drawdown = 0
@@ -1898,7 +1795,7 @@ async def get_returns_calendar(
                 }
             }
 
-        snapshots = sorted(snapshots, key=lambda x: x['snapshot_date'])
+        snapshots = sorted(snapshots, key=lambda x: normalize_date_str(x['snapshot_date']))
 
         # Calculate daily returns
         daily_returns = []
@@ -1909,7 +1806,7 @@ async def get_returns_calendar(
                 pnl = curr_value - prev_value
                 pnl_pct = (pnl / prev_value) * 100
                 daily_returns.append({
-                    'date': snapshots[i]['snapshot_date'],
+                    'date': normalize_date_str(snapshots[i]['snapshot_date']),
                     'pnl': pnl,
                     'pnl_pct': pnl_pct,
                     'is_trading_day': True,
@@ -1921,7 +1818,7 @@ async def get_returns_calendar(
             # Aggregate by month
             monthly = {}
             for r in daily_returns:
-                month_key = r['date'][:7]  # YYYY-MM
+                month_key = r['date'][:7]  # YYYY-MM (already normalized)
                 if month_key not in monthly:
                     monthly[month_key] = {'pnl': 0, 'start_value': None}
                 monthly[month_key]['pnl'] += r['pnl']
@@ -1931,7 +1828,7 @@ async def get_returns_calendar(
             for month, vals in sorted(monthly.items()):
                 # Find the start value for the month
                 month_start = f"{month}-01"
-                start_snap = next((s for s in snapshots if s['snapshot_date'] >= month_start), None)
+                start_snap = next((s for s in snapshots if normalize_date_str(s['snapshot_date']) >= month_start), None)
                 start_value = float(start_snap.get('total_value', 0)) if start_snap else 0
                 pnl_pct = (vals['pnl'] / start_value * 100) if start_value > 0 else 0
                 data.append({
@@ -1943,7 +1840,7 @@ async def get_returns_calendar(
             # Aggregate by year
             yearly = {}
             for r in daily_returns:
-                year_key = r['date'][:4]  # YYYY
+                year_key = r['date'][:4]  # YYYY (already normalized)
                 if year_key not in yearly:
                     yearly[year_key] = {'pnl': 0}
                 yearly[year_key]['pnl'] += r['pnl']
@@ -1952,7 +1849,7 @@ async def get_returns_calendar(
             data = []
             for year, vals in sorted(yearly.items()):
                 year_start = f"{year}-01-01"
-                start_snap = next((s for s in snapshots if s['snapshot_date'] >= year_start), None)
+                start_snap = next((s for s in snapshots if normalize_date_str(s['snapshot_date']) >= year_start), None)
                 start_value = float(start_snap.get('total_value', 0)) if start_snap else 0
                 pnl_pct = (vals['pnl'] / start_value * 100) if start_value > 0 else 0
                 data.append({
@@ -2010,42 +1907,108 @@ async def get_daily_returns_detail(
                 "positions": [],
                 "top_contributors": [],
                 "top_detractors": [],
+                "has_pending": False,
             }
 
         loop = asyncio.get_running_loop()
         position_returns = []
         total_value = sum(float(p.get('current_value') or 0) for p in enriched)
         total_daily_pnl = 0
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        has_pending = False  # Track if any position has pending data
 
         for pos in enriched:
             code = pos.get('asset_code')
             asset_type = pos.get('asset_type')
             shares = float(pos.get('total_shares') or 0)
-            current_price = float(pos.get('current_price') or pos.get('average_cost', 0))
             current_value = float(pos.get('current_value') or 0)
             weight_pct = (current_value / total_value * 100) if total_value > 0 else 0
 
-            # Get yesterday's price
-            yesterday_price = current_price
+            # Get price history and determine if today's data is available
+            today_nav = None
+            yesterday_nav = None
+            latest_date = None
+            prev_date = None
+            is_pending = False
+
             try:
                 if asset_type == 'fund':
-                    history = await loop.run_in_executor(None, get_fund_nav_history, code, 5)
-                    if history and len(history) >= 2:
-                        yesterday_price = float(history[-2]['value'])
+                    history = await loop.run_in_executor(None, get_fund_nav_history, code, 10)
+                    if history and len(history) >= 1:
+                        # history is sorted by date ascending, last one is most recent
+                        latest_date = history[-1].get('date', '')
+                        latest_nav = float(history[-1]['value'])
+                        
+                        # Check if latest data is today's data
+                        if latest_date != today_str:
+                            # Today's data not yet available, mark as pending
+                            is_pending = True
+                            has_pending = True
+                            # When pending, today_nav is null (will show "待更新")
+                            # yesterday_nav is the latest available data (most recent trading day)
+                            today_nav = None
+                            yesterday_nav = latest_nav
+                            prev_date = latest_date
+                        else:
+                            # Today's data is available
+                            today_nav = latest_nav
+                            # Yesterday is the previous trading day
+                            if len(history) >= 2:
+                                prev_date = history[-2].get('date', '')
+                                yesterday_nav = float(history[-2]['value'])
+                            else:
+                                yesterday_nav = today_nav
+                                prev_date = latest_date
                 else:
-                    history = await loop.run_in_executor(None, get_stock_price_history, code, 5)
-                    if history and len(history) >= 2:
-                        yesterday_price = float(history[-2]['price'])
-            except:
-                pass
+                    history = await loop.run_in_executor(None, get_stock_price_history, code, 10)
+                    if history and len(history) >= 1:
+                        latest_date = history[-1].get('date', '')
+                        latest_price = float(history[-1]['price'])
+                        
+                        if latest_date != today_str:
+                            is_pending = True
+                            has_pending = True
+                            today_nav = None
+                            yesterday_nav = latest_price
+                            prev_date = latest_date
+                        else:
+                            today_nav = latest_price
+                            if len(history) >= 2:
+                                prev_date = history[-2].get('date', '')
+                                yesterday_nav = float(history[-2]['price'])
+                            else:
+                                yesterday_nav = today_nav
+                                prev_date = latest_date
+            except Exception as e:
+                print(f"Error fetching history for {code}: {e}")
+                # Fallback to enriched data
+                is_pending = True
+                has_pending = True
+                today_nav = None
+                yesterday_nav = float(pos.get('current_price') or pos.get('average_cost', 0))
 
-            # Calculate daily P&L
-            nav_change = current_price - yesterday_price
-            nav_change_pct = (nav_change / yesterday_price * 100) if yesterday_price > 0 else 0
-            position_pnl = shares * nav_change
-            position_pnl_pct = nav_change_pct  # Same as price change percentage
+            # Use fallback if no history data
+            if today_nav is None and yesterday_nav is None:
+                is_pending = True
+                has_pending = True
+                today_nav = None
+                yesterday_nav = float(pos.get('current_price') or pos.get('average_cost', 0))
 
-            total_daily_pnl += position_pnl
+            if yesterday_nav is None:
+                yesterday_nav = today_nav
+
+            # Calculate daily P&L (set to None if pending)
+            if is_pending:
+                nav_change = None
+                nav_change_pct = None
+                position_pnl = None
+                position_pnl_pct = None
+            else:
+                nav_change = today_nav - yesterday_nav
+                nav_change_pct = (nav_change / yesterday_nav * 100) if yesterday_nav > 0 else 0
+                position_pnl = shares * nav_change
+                position_pnl_pct = nav_change_pct
+                total_daily_pnl += position_pnl
 
             position_returns.append({
                 'position_id': pos.get('id'),
@@ -2053,38 +2016,48 @@ async def get_daily_returns_detail(
                 'asset_name': pos.get('asset_name', code),
                 'asset_type': asset_type,
                 'shares': shares,
-                'yesterday_nav': round(yesterday_price, 4),
-                'today_nav': round(current_price, 4),
-                'nav_change': round(nav_change, 4),
-                'nav_change_pct': round(nav_change_pct, 2),
-                'position_pnl': round(position_pnl, 2),
-                'position_pnl_pct': round(position_pnl_pct, 2),
+                'yesterday_nav': round(yesterday_nav, 4) if yesterday_nav else None,
+                'yesterday_date': prev_date,
+                'today_nav': round(today_nav, 4) if today_nav else None,
+                'today_date': latest_date,
+                'nav_change': round(nav_change, 4) if nav_change is not None else None,
+                'nav_change_pct': round(nav_change_pct, 2) if nav_change_pct is not None else None,
+                'position_pnl': round(position_pnl, 2) if position_pnl is not None else None,
+                'position_pnl_pct': round(position_pnl_pct, 2) if position_pnl_pct is not None else None,
                 'contribution_pct': 0,  # Will be calculated after
                 'market_value': round(current_value, 2),
                 'weight_pct': round(weight_pct, 2),
+                'is_pending': is_pending,  # Flag for frontend to show "待更新"
             })
 
         # Calculate contribution percentages
         for pr in position_returns:
-            if total_daily_pnl != 0:
+            if total_daily_pnl != 0 and pr['position_pnl'] is not None:
                 pr['contribution_pct'] = round((pr['position_pnl'] / abs(total_daily_pnl)) * 100, 2)
 
-        # Sort by contribution
-        sorted_returns = sorted(position_returns, key=lambda x: x['position_pnl'], reverse=True)
-        top_contributors = [p for p in sorted_returns if p['position_pnl'] > 0][:3]
-        top_detractors = [p for p in sorted_returns if p['position_pnl'] < 0][:3]
+        # Sort by contribution (pending items at the end)
+        sorted_returns = sorted(
+            position_returns, 
+            key=lambda x: (x['is_pending'], -(x['position_pnl'] or 0))
+        )
+        top_contributors = [p for p in sorted_returns if not p['is_pending'] and p['position_pnl'] is not None and p['position_pnl'] > 0][:3]
+        top_detractors = [p for p in sorted_returns if not p['is_pending'] and p['position_pnl'] is not None and p['position_pnl'] < 0][:3]
 
         # Total P&L percentage
-        yesterday_total = sum(float(p.get('total_shares', 0)) * p.get('yesterday_nav', 0) for p in position_returns)
+        yesterday_total = sum(
+            float(p.get('shares', 0)) * (p.get('yesterday_nav') or 0) 
+            for p in position_returns if not p['is_pending']
+        )
         total_pnl_pct = (total_daily_pnl / yesterday_total * 100) if yesterday_total > 0 else 0
 
         return sanitize_for_json({
-            "date": date or datetime.now().strftime('%Y-%m-%d'),
+            "date": date or today_str,
             "total_pnl": round(total_daily_pnl, 2),
             "total_pnl_pct": round(total_pnl_pct, 2),
             "positions": sorted_returns,
             "top_contributors": top_contributors,
             "top_detractors": top_detractors,
+            "has_pending": has_pending,  # Flag indicating some positions have pending data
         })
     except HTTPException:
         raise
@@ -2119,17 +2092,18 @@ async def explain_daily_returns(
             }
 
         # Build prompt
-        contributors_text = "\n".join([
-            f"- {p['asset_name']} ({p['asset_code']}): +{p['position_pnl']:.2f}元 (+{p['nav_change_pct']:.2f}%)"
+        contributors_text = "；".join([
+            f"{p['asset_name']}({p['asset_code']}) +{p['position_pnl']:.2f}元(+{p['nav_change_pct']:.2f}%)"
             for p in detail['top_contributors']
         ]) or "无"
 
-        detractors_text = "\n".join([
-            f"- {p['asset_name']} ({p['asset_code']}): {p['position_pnl']:.2f}元 ({p['nav_change_pct']:.2f}%)"
+        detractors_text = "；".join([
+            f"{p['asset_name']}({p['asset_code']}) {p['position_pnl']:.2f}元({p['nav_change_pct']:.2f}%)"
             for p in detail['top_detractors']
         ]) or "无"
 
         total_value = sum(p['market_value'] for p in detail['positions'])
+        pending_count = sum(1 for p in detail['positions'] if p.get('is_pending'))
 
         # Get market context if requested
         market_context = ""
@@ -2141,34 +2115,23 @@ async def explain_daily_returns(
                 if indices:
                     sh_idx = next((i for i in indices if '上证' in i.get('name', '')), None)
                     sz_idx = next((i for i in indices if '深证' in i.get('name', '')), None)
-                    market_context = f"""
-## 市场背景
-- 上证指数: {sh_idx['change_pct']:.2f}%
-- 深证成指: {sz_idx['change_pct']:.2f}%
-""" if sh_idx and sz_idx else ""
+                    market_context = (
+                        f"市场：上证{sh_idx['change_pct']:.2f}%，深证{sz_idx['change_pct']:.2f}%。"
+                        if sh_idx and sz_idx else ""
+                    )
             except:
                 pass
 
-        prompt = f"""你是一位专业的投资组合分析师。请根据以下今日收益数据，用2-4句话解读今日收益表现：
-
-## 今日收益概况
-- 日期: {detail['date']}
-- 总收益: ¥{detail['total_pnl']:.2f} ({detail['total_pnl_pct']:.2f}%)
-- 组合总市值: ¥{total_value:.2f}
-
-## 主要贡献者（涨幅最大）
-{contributors_text}
-
-## 主要拖累者（跌幅最大）
-{detractors_text}
-{market_context}
-请分析：
-1. 今日收益的主要驱动因素
-2. 表现突出或异常的持仓
-3. 是否跑赢/跑输大盘（如有市场数据）
-4. 简短的操作建议（如有）
-
-请用简洁专业的语言回答，控制在100字以内。"""
+        prompt = (
+            "你是券商投研背景的投资组合分析师。"
+            "基于下述数据，输出一段中文‘收益日报摘要’式解读。"
+            "要求：不使用Markdown/列表/换行；语气客观专业；覆盖总体收益、主要贡献/拖累、与大盘对比(如有)、风险提示、下一步建议；"
+            "严格控制在200字以内（含标点与数字）。"
+            f"数据：日期{detail['date']}；总收益{detail['total_pnl']:.2f}元({detail['total_pnl_pct']:.2f}%)；"
+            f"总市值{total_value:.2f}元；贡献{contributors_text}；拖累{detractors_text}；"
+            f"{market_context}"
+            f"净值待更新{pending_count}只。"
+        )
 
         llm = get_llm_client()
         explanation = await asyncio.get_event_loop().run_in_executor(
@@ -2210,4 +2173,208 @@ async def migrate_old_positions(portfolio_id: int, current_user: User = Depends(
         raise
     except Exception as e:
         print(f"Error migrating positions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ====================================================================
+# Portfolio Snapshot API (快照管理)
+# ====================================================================
+
+@router.post("/api/portfolios/{portfolio_id}/snapshots")
+async def create_portfolio_snapshot(
+    portfolio_id: int,
+    date: Optional[str] = Body(None, embed=True),
+    current_user: User = Depends(get_current_user)
+):
+    """Create a portfolio snapshot for a specific date (defaults to today)."""
+    from src.storage.db import save_portfolio_snapshot, get_latest_snapshot
+
+    try:
+        portfolio = get_portfolio_by_id(portfolio_id, current_user.id)
+        if not portfolio:
+            raise HTTPException(status_code=404, detail="Portfolio not found")
+
+        snapshot_date = date or datetime.now().strftime('%Y-%m-%d')
+
+        positions = get_portfolio_positions(portfolio_id, current_user.id)
+        enriched = await enrich_positions_with_prices(positions)
+
+        if not enriched:
+            return {"message": "No positions to snapshot", "snapshot_date": snapshot_date}
+
+        total_value = sum(float(p.get('current_value') or p.get('total_shares', 0) * p.get('average_cost', 0)) for p in enriched)
+        total_cost = sum(float(p.get('total_shares', 0) * p.get('average_cost', 0)) for p in enriched)
+        cumulative_pnl = total_value - total_cost
+        cumulative_pnl_pct = ((total_value / total_cost) - 1) * 100 if total_cost > 0 else 0
+
+        # Calculate daily P&L by comparing with previous snapshot
+        daily_pnl = 0
+        daily_pnl_pct = 0
+        prev_snapshot = get_latest_snapshot(portfolio_id)
+        if prev_snapshot and prev_snapshot['snapshot_date'] != snapshot_date:
+            prev_value = float(prev_snapshot.get('total_value', 0))
+            if prev_value > 0:
+                daily_pnl = total_value - prev_value
+                daily_pnl_pct = (daily_pnl / prev_value) * 100
+
+        # Calculate allocation
+        allocation = {'by_type': {}, 'by_sector': {}}
+        for pos in enriched:
+            pos_value = pos.get('current_value') or (pos.get('total_shares', 0) * pos.get('average_cost', 0))
+            asset_type = pos.get('asset_type', 'fund')
+            sector = pos.get('sector', '未分类')
+
+            allocation['by_type'][asset_type] = allocation['by_type'].get(asset_type, 0) + pos_value
+            allocation['by_sector'][sector] = allocation['by_sector'].get(sector, 0) + pos_value
+
+        if total_value > 0:
+            allocation['by_type'] = {k: round(v / total_value * 100, 2) for k, v in allocation['by_type'].items()}
+            allocation['by_sector'] = {k: round(v / total_value * 100, 2) for k, v in allocation['by_sector'].items()}
+
+        snapshot_data = {
+            'snapshot_date': snapshot_date,
+            'total_value': round(total_value, 2),
+            'total_cost': round(total_cost, 2),
+            'daily_pnl': round(daily_pnl, 2),
+            'daily_pnl_pct': round(daily_pnl_pct, 2),
+            'cumulative_pnl': round(cumulative_pnl, 2),
+            'cumulative_pnl_pct': round(cumulative_pnl_pct, 2),
+            'allocation': allocation,
+        }
+
+        snapshot_id = save_portfolio_snapshot(snapshot_data, portfolio_id)
+
+        return {
+            "id": snapshot_id,
+            "message": "Snapshot created successfully",
+            "snapshot": snapshot_data,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error creating snapshot: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/portfolios/{portfolio_id}/snapshots/backfill")
+async def backfill_portfolio_snapshots(
+    portfolio_id: int,
+    days: int = Body(30, embed=True),
+    current_user: User = Depends(get_current_user)
+):
+    """Backfill historical snapshots for the past N days."""
+    from src.storage.db import save_portfolio_snapshot, get_portfolio_snapshots
+    from datetime import timedelta
+
+    try:
+        portfolio = get_portfolio_by_id(portfolio_id, current_user.id)
+        if not portfolio:
+            raise HTTPException(status_code=404, detail="Portfolio not found")
+
+        positions = get_portfolio_positions(portfolio_id, current_user.id)
+        if not positions:
+            return {"message": "No positions to backfill", "created_count": 0}
+
+        # Get existing snapshots to avoid duplicates
+        existing_snapshots = get_portfolio_snapshots(portfolio_id, limit=days + 10)
+        existing_dates = {s['snapshot_date'] for s in existing_snapshots}
+
+        # Get price histories for all positions
+        loop = asyncio.get_running_loop()
+        price_histories = {}
+
+        for pos in positions:
+            code = pos.get('asset_code')
+            asset_type = pos.get('asset_type')
+
+            try:
+                if asset_type == 'fund':
+                    history = await loop.run_in_executor(None, get_fund_nav_history, code, days + 10)
+                    if history:
+                        price_histories[code] = {h['date']: float(h['value']) for h in history}
+                else:
+                    history = await loop.run_in_executor(None, get_stock_price_history, code, days + 10)
+                    if history:
+                        price_histories[code] = {h['date']: float(h['price']) for h in history}
+            except Exception as e:
+                print(f"Error fetching history for {code}: {e}")
+
+        if not price_histories:
+            return {"message": "No price history available", "created_count": 0}
+
+        # Find common dates across all positions
+        all_dates = set()
+        for dates in price_histories.values():
+            all_dates.update(dates.keys())
+
+        # Sort dates and take the most recent N days
+        sorted_dates = sorted(all_dates, reverse=True)[:days]
+
+        created_count = 0
+        prev_value = None
+
+        # Process dates from oldest to newest for correct daily P&L calculation
+        for date_str in sorted(sorted_dates):
+            if date_str in existing_dates:
+                continue
+
+            # Calculate portfolio value for this date
+            total_value = 0
+            total_cost = 0
+
+            for pos in positions:
+                code = pos.get('asset_code')
+                shares = float(pos.get('total_shares', 0))
+                avg_cost = float(pos.get('average_cost', 0))
+
+                if code in price_histories and date_str in price_histories[code]:
+                    price = price_histories[code][date_str]
+                    total_value += shares * price
+                else:
+                    # Use average cost if no price available
+                    total_value += shares * avg_cost
+
+                total_cost += shares * avg_cost
+
+            if total_value <= 0:
+                continue
+
+            cumulative_pnl = total_value - total_cost
+            cumulative_pnl_pct = ((total_value / total_cost) - 1) * 100 if total_cost > 0 else 0
+
+            # Calculate daily P&L
+            daily_pnl = 0
+            daily_pnl_pct = 0
+            if prev_value and prev_value > 0:
+                daily_pnl = total_value - prev_value
+                daily_pnl_pct = (daily_pnl / prev_value) * 100
+
+            snapshot_data = {
+                'snapshot_date': date_str,
+                'total_value': round(total_value, 2),
+                'total_cost': round(total_cost, 2),
+                'daily_pnl': round(daily_pnl, 2),
+                'daily_pnl_pct': round(daily_pnl_pct, 2),
+                'cumulative_pnl': round(cumulative_pnl, 2),
+                'cumulative_pnl_pct': round(cumulative_pnl_pct, 2),
+                'allocation': {},
+            }
+
+            save_portfolio_snapshot(snapshot_data, portfolio_id)
+            created_count += 1
+            prev_value = total_value
+
+        return {
+            "message": f"Successfully created {created_count} snapshots",
+            "created_count": created_count,
+            "days_requested": days,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error backfilling snapshots: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

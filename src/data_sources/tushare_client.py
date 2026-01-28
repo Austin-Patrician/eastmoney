@@ -447,15 +447,17 @@ def get_fx_daily_tushare(
     return df
 
 
-def get_latest_trade_date(max_days_back: int = 30) -> Optional[str]:
+def get_latest_trade_date(max_days_back: int = 30, offset: int = 0) -> Optional[str]:
     """
     Get the most recent trading day (for non-trading days).
 
     This function finds the latest trading day that is <= today.
     For example, if today is Saturday, it returns Friday's date.
+    If offset > 0, it returns the trading day N days before the latest.
 
     Args:
         max_days_back: Maximum days to look back
+        offset: Number of trading days to offset from the latest (0 = latest)
 
     Returns:
         Trade date in YYYYMMDD format, or None if not found
@@ -476,14 +478,19 @@ def get_latest_trade_date(max_days_back: int = 30) -> Optional[str]:
                 # Sort by date descending to get most recent first
                 trade_days = trade_days.sort_values('cal_date', ascending=False)
 
-                # Find the most recent trading day that is <= today
+                # Find all trading days that are <= today
+                valid_days = []
                 for _, row in trade_days.iterrows():
                     cal_date = str(row['cal_date'])
                     if cal_date <= today:
-                        return cal_date
+                        valid_days.append(cal_date)
 
-                # If no date <= today found, return the most recent available
-                return trade_days.iloc[0]['cal_date']
+                if len(valid_days) > offset:
+                    return valid_days[offset]
+
+                # If not enough days found but we have some, return the oldest available
+                if valid_days:
+                    return valid_days[-1]
 
     except Exception as e:
         print(f"Error fetching latest trade date: {e}")
@@ -1034,7 +1041,7 @@ def get_realtime_quotes(ts_codes: list) -> Optional[pd.DataFrame]:
 
         return df
 
-    except Exception as e:
+    except BaseException as e:
         print(f"Error fetching realtime quotes: {e}")
         return None
 

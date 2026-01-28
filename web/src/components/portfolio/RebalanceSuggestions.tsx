@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Paper, Typography, Box, Button, Chip, Skeleton } from '@mui/material';
+import type { SxProps, Theme } from '@mui/material';
 import TipsAndUpdatesIcon from '@mui/icons-material/TipsAndUpdates';
 import type { RebalanceSuggestion } from '../../api';
 
@@ -8,6 +9,7 @@ interface RebalanceSuggestionsProps {
   currentAllocation: Record<string, number>;
   loading: boolean;
   onRefresh: () => void;
+  sx?: SxProps<Theme>;
 }
 
 const PRIORITY_COLORS: Record<string, 'error' | 'warning' | 'info' | 'default'> = {
@@ -28,12 +30,17 @@ export default function RebalanceSuggestions({
   currentAllocation,
   loading,
   onRefresh,
+  sx,
 }: RebalanceSuggestionsProps) {
   const { t } = useTranslation();
 
+  // Safe defaults for potentially undefined data
+  const allocation = currentAllocation || {};
+  const suggestionsList = suggestions || [];
+
   if (loading) {
     return (
-      <Paper sx={{ p: 2, borderRadius: '12px' }}>
+      <Paper sx={{ p: 2, borderRadius: '12px', ...sx }}>
         <Skeleton width="60%" height={28} />
         <Skeleton width="100%" height={60} sx={{ mt: 1 }} />
         <Skeleton width="100%" height={60} />
@@ -42,7 +49,7 @@ export default function RebalanceSuggestions({
   }
 
   return (
-    <Paper sx={{ p: 2, borderRadius: '12px' }}>
+    <Paper sx={{ p: 2, borderRadius: '12px', ...sx }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <TipsAndUpdatesIcon sx={{ color: '#f59e0b' }} />
@@ -60,24 +67,26 @@ export default function RebalanceSuggestions({
       </Box>
 
       {/* Current Allocation */}
-      <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
-        {Object.entries(currentAllocation).map(([type, pct]) => (
-          <Chip
-            key={type}
-            label={`${type === 'stock' ? t('portfolio.stock_type') : t('portfolio.fund_type')}: ${pct}%`}
-            variant="outlined"
-            size="small"
-          />
-        ))}
-      </Box>
+      {Object.keys(allocation).length > 0 && (
+        <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+          {Object.entries(allocation).map(([type, pct]) => (
+            <Chip
+              key={type}
+              label={`${type === 'stock' ? t('portfolio.stock_type') : t('portfolio.fund_type')}: ${pct}%`}
+              variant="outlined"
+              size="small"
+            />
+          ))}
+        </Box>
+      )}
 
-      {suggestions.length === 0 ? (
+      {suggestionsList.length === 0 ? (
         <Box sx={{ textAlign: 'center', py: 3 }}>
           <Typography color="text.secondary">{t('portfolio.no_suggestions')}</Typography>
         </Box>
       ) : (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          {suggestions.map((suggestion, idx) => (
+          {suggestionsList.map((suggestion, idx) => (
             <Box
               key={idx}
               sx={{

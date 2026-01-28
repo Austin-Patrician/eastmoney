@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Paper, Typography, Box, Chip, Skeleton, Button } from '@mui/material';
+import type { SxProps, Theme } from '@mui/material';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer } from 'recharts';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import type { PortfolioDiagnosis } from '../../api';
@@ -8,6 +9,7 @@ interface PortfolioDiagnosisCardProps {
   diagnosis: PortfolioDiagnosis | null;
   loading: boolean;
   onRefresh: () => void;
+  sx?: SxProps<Theme>;
 }
 
 const GRADE_COLORS: Record<string, string> = {
@@ -17,12 +19,12 @@ const GRADE_COLORS: Record<string, string> = {
   D: '#ef4444',
 };
 
-export default function PortfolioDiagnosisCard({ diagnosis, loading, onRefresh }: PortfolioDiagnosisCardProps) {
+export default function PortfolioDiagnosisCard({ diagnosis, loading, onRefresh, sx }: PortfolioDiagnosisCardProps) {
   const { t } = useTranslation();
 
   if (loading) {
     return (
-      <Paper sx={{ p: 2, borderRadius: '12px' }}>
+      <Paper sx={{ p: 2, borderRadius: '12px', ...sx }}>
         <Skeleton width="60%" height={28} />
         <Skeleton variant="circular" width={200} height={200} sx={{ mx: 'auto', my: 2 }} />
         <Skeleton width="80%" />
@@ -33,7 +35,7 @@ export default function PortfolioDiagnosisCard({ diagnosis, loading, onRefresh }
 
   if (!diagnosis) {
     return (
-      <Paper sx={{ p: 3, borderRadius: '12px', textAlign: 'center' }}>
+      <Paper sx={{ p: 3, borderRadius: '12px', textAlign: 'center', ...sx }}>
         <AutoAwesomeIcon sx={{ fontSize: 48, color: '#6366f1', mb: 1 }} />
         <Typography variant="h6" sx={{ mb: 1 }}>{t('portfolio.ai_diagnosis')}</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -51,14 +53,20 @@ export default function PortfolioDiagnosisCard({ diagnosis, loading, onRefresh }
     );
   }
 
-  const radarData = diagnosis.dimensions.map((d) => ({
+  const dimensions = diagnosis.dimensions || [];
+  const recommendations = diagnosis.recommendations || [];
+  const totalScore = diagnosis.total_score ?? 0;
+  const maxScore = diagnosis.max_score ?? 100;
+  const grade = diagnosis.grade || '-';
+
+  const radarData = dimensions.map((d) => ({
     subject: d.name,
     score: d.score,
     fullMark: d.max,
   }));
 
   return (
-    <Paper sx={{ p: 2, borderRadius: '12px' }}>
+    <Paper sx={{ p: 2, borderRadius: '12px', ...sx }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <AutoAwesomeIcon sx={{ color: '#6366f1' }} />
@@ -68,20 +76,20 @@ export default function PortfolioDiagnosisCard({ diagnosis, loading, onRefresh }
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Chip
-            label={`${diagnosis.grade}`}
+            label={`${grade}`}
             sx={{
               fontWeight: 800,
               fontSize: '1.1rem',
-              bgcolor: GRADE_COLORS[diagnosis.grade] || '#94a3b8',
+              bgcolor: GRADE_COLORS[grade] || '#94a3b8',
               color: 'white',
               width: 40,
               height: 40,
             }}
           />
           <Typography variant="h5" sx={{ fontWeight: 700, fontFamily: 'JetBrains Mono, monospace' }}>
-            {diagnosis.total_score.toFixed(0)}
+            {totalScore.toFixed(0)}
             <Typography component="span" variant="body2" color="text.secondary">
-              /{diagnosis.max_score}
+              /{maxScore}
             </Typography>
           </Typography>
         </Box>
@@ -104,12 +112,12 @@ export default function PortfolioDiagnosisCard({ diagnosis, loading, onRefresh }
         </ResponsiveContainer>
       </Box>
 
-      {diagnosis.recommendations.length > 0 && (
+      {recommendations.length > 0 && (
         <Box sx={{ mt: 2 }}>
           <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
             {t('portfolio.recommendations')}
           </Typography>
-          {diagnosis.recommendations.map((rec, idx) => (
+          {recommendations.map((rec, idx) => (
             <Box
               key={idx}
               sx={{

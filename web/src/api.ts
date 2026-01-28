@@ -1868,6 +1868,23 @@ export const createUnifiedPosition = async (
     return response.data;
 };
 
+export interface UnifiedPositionUpdateData {
+    asset_name?: string;
+    total_shares?: number;
+    average_cost?: number;
+    sector?: string;
+    notes?: string;
+}
+
+export const updateUnifiedPosition = async (
+    portfolioId: number,
+    positionId: number,
+    data: UnifiedPositionUpdateData
+): Promise<{ message: string }> => {
+    const response = await api.put(`/portfolios/${portfolioId}/positions/${positionId}`, data);
+    return response.data;
+};
+
 export const deleteUnifiedPosition = async (
     portfolioId: number,
     positionId: number
@@ -2355,15 +2372,18 @@ export interface DailyPositionReturn {
     asset_name: string;
     asset_type: 'stock' | 'fund';
     shares: number;
-    yesterday_nav: number;
-    today_nav: number;
-    nav_change: number;
-    nav_change_pct: number;
-    position_pnl: number;
-    position_pnl_pct: number;
+    yesterday_nav: number | null;
+    yesterday_date?: string;
+    today_nav: number | null;
+    today_date?: string;
+    nav_change: number | null;
+    nav_change_pct: number | null;
+    position_pnl: number | null;
+    position_pnl_pct: number | null;
     contribution_pct: number;
     market_value: number;
     weight_pct: number;
+    is_pending?: boolean;
 }
 
 export interface DailyReturnsDetail {
@@ -2373,6 +2393,7 @@ export interface DailyReturnsDetail {
     positions: DailyPositionReturn[];
     top_contributors: DailyPositionReturn[];
     top_detractors: DailyPositionReturn[];
+    has_pending?: boolean;
 }
 
 // Returns Explanation Types
