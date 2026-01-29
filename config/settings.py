@@ -25,6 +25,13 @@ REDIS_URL = os.getenv("REDIS_URL")  # e.g., redis://localhost:6379/0 or redis://
 # TuShare Pro Configuration
 TUSHARE_API_TOKEN = os.getenv("TUSHARE_API_TOKEN")
 
+# TuShare Points Level (determines API rate limits)
+# Options: 120, 2000, 5000, 10000
+TUSHARE_POINTS = int(os.getenv("TUSHARE_POINTS", "2000"))
+
+# TuShare Rate Limit Safety Margin (0.8-0.95 recommended)
+TUSHARE_RATE_LIMIT_MARGIN = float(os.getenv("TUSHARE_RATE_LIMIT_MARGIN", "0.9"))
+
 # Data Source Configuration
 # Options: 'tushare', 'akshare', 'hybrid' (default: hybrid)
 # - tushare: Use TuShare Pro as primary source

@@ -5,6 +5,7 @@ Designed for 2H4G server:
 - Batch processing (100 stocks/batch)
 - Limited concurrency (4 threads max)
 - Scheduled to run at 6:00 AM daily
+- Tier-based rate limiting for TuShare API (auto-configured from TUSHARE_POINTS env var)
 """
 import time
 import threading
@@ -25,6 +26,15 @@ from src.storage.db import (
     delete_old_fund_factors,
 )
 from .cache import factor_cache
+from .rate_limiter import tushare_rate_limiter
+
+# Print rate limiter configuration on module load
+_rate_limiter_stats = tushare_rate_limiter.get_stats()
+print(f"[RateLimiter] Initialized for {_rate_limiter_stats['tier_name']} "
+      f"({_rate_limiter_stats['points']} points): "
+      f"{_rate_limiter_stats['max_calls']} calls/minute "
+      f"(raw limit: {_rate_limiter_stats['raw_limit']}, "
+      f"safety margin: {_rate_limiter_stats['safety_margin']:.0%})")
 
 
 class DailyFactorComputer:
@@ -33,14 +43,13 @@ class DailyFactorComputer:
 
     Optimized for limited resources:
     - Batch processing to reduce memory
-    - Rate-limited API calls
+    - Tier-based global rate limiter for TuShare API (auto-configured)
     - Progress tracking for long-running jobs
     """
 
     # Configuration
     BATCH_SIZE = 100
-    MAX_WORKERS = 4
-    API_DELAY = 0.5  # seconds between API calls
+    MAX_WORKERS = 4  # Parallel workers per batch
 
     def __init__(self):
         self._running = False
@@ -78,12 +87,46 @@ class DailyFactorComputer:
         conn.close()
         return [r[0] for r in results]
 
-    def _get_all_fund_codes(self) -> List[str]:
-        """Get all active fund codes from database."""
+    def _get_all_fund_codes(self, universe: str = "tracked") -> List[str]:
+        """
+        Get fund codes from database.
+
+        Args:
+            universe: Which universe to use
+                - "tracked": User's tracked funds (funds.is_active=1)
+                - "market": All market funds from fund_basic table (全市场)
+                - "market_otc": OTC funds only (场外基金, market='O')
+                - "market_etf": Exchange-traded funds only (场内基金, market='E')
+
+        Returns:
+            List of fund codes
+        """
         conn = get_db_connection()
-        results = conn.execute(
-            "SELECT DISTINCT code FROM funds WHERE is_active = 1"
-        ).fetchall()
+
+        if universe == "tracked":
+            # User's tracked funds (original behavior)
+            results = conn.execute(
+                "SELECT DISTINCT code FROM funds WHERE is_active = 1"
+            ).fetchall()
+        elif universe == "market":
+            # All market funds from fund_basic
+            results = conn.execute(
+                "SELECT DISTINCT code FROM fund_basic WHERE status = 'L'"
+            ).fetchall()
+        elif universe == "market_otc":
+            # OTC funds only (场外)
+            results = conn.execute(
+                "SELECT DISTINCT code FROM fund_basic WHERE status = 'L' AND market = 'O'"
+            ).fetchall()
+        elif universe == "market_etf":
+            # Exchange-traded funds only (场内)
+            results = conn.execute(
+                "SELECT DISTINCT code FROM fund_basic WHERE status = 'L' AND market = 'E'"
+            ).fetchall()
+        else:
+            conn.close()
+            raise ValueError(f"Invalid universe: {universe}. Must be 'tracked', 'market', 'market_otc', or 'market_etf'")
+
         conn.close()
         return [r[0] for r in results]
 
@@ -102,6 +145,8 @@ class DailyFactorComputer:
         Returns:
             Tuple of (code, factors_dict or None if failed)
         """
+        # Rate limiting is now handled inside tushare_call_with_retry
+
         # Import here to avoid circular imports
         try:
             from src.analysis.recommendation.stock_engine.factors.technical import TechnicalFactors
@@ -151,6 +196,8 @@ class DailyFactorComputer:
         Returns:
             Tuple of (code, factors_dict or None if failed)
         """
+        # Rate limiting is now handled inside tushare_call_with_retry
+
         try:
             from src.analysis.recommendation.fund_engine.factors.performance import PerformanceFactors
             from src.analysis.recommendation.fund_engine.factors.risk import RiskFactors
@@ -210,6 +257,12 @@ class DailyFactorComputer:
         # Convert trade_date format for DB storage
         trade_date_db = f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:8]}"
 
+        # Print rate limiter stats before batch
+        stats = tushare_rate_limiter.get_stats()
+        print(f"[Batch Start] Tier: {stats['tier_name']}, "
+              f"Usage: {stats['current_calls']}/{stats['max_calls']} calls "
+              f"({stats['utilization']:.1f}%)")
+
         with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
             futures = {
                 executor.submit(compute_func, code, trade_date): code
@@ -233,8 +286,10 @@ class DailyFactorComputer:
                     print(f"Batch processing error for {code}: {e}")
                     failure += 1
 
-                # Rate limiting
-                time.sleep(self.API_DELAY)
+        # Print rate limiter stats after batch
+        stats = tushare_rate_limiter.get_stats()
+        print(f"[Batch End] Usage: {stats['current_calls']}/{stats['max_calls']} calls "
+              f"({stats['utilization']:.1f}%)")
 
         return success, failure
 
@@ -325,12 +380,17 @@ class DailyFactorComputer:
         finally:
             self._running = False
 
-    def compute_all_fund_factors(self, trade_date: str = None) -> Dict:
+    def compute_all_fund_factors(self, trade_date: str = None, universe: str = "market_otc") -> Dict:
         """
-        Compute factors for all tracked funds.
+        Compute factors for funds.
 
         Args:
             trade_date: Trade date in YYYYMMDD format
+            universe: Which fund universe to compute
+                - "tracked": User's tracked funds only (default)
+                - "market": All market funds (requires fund_basic table synced)
+                - "market_otc": OTC funds only (场外基金)
+                - "market_etf": Exchange-traded funds only (场内基金)
 
         Returns:
             Summary dict with success/failure counts
@@ -345,15 +405,24 @@ class DailyFactorComputer:
             if not trade_date:
                 trade_date = format_date_yyyymmdd()
 
-        print(f"Starting fund factor computation for {trade_date}...")
+        print(f"Starting fund factor computation for {trade_date} (universe={universe})...")
 
         try:
-            all_codes = self._get_all_fund_codes()
+            all_codes = self._get_all_fund_codes(universe=universe)
             total = len(all_codes)
 
             if total == 0:
-                print("No funds to process")
-                return {'trade_date': trade_date, 'total': 0, 'success': 0, 'failure': 0}
+                if universe != "tracked":
+                    # Try to sync fund_basic if market universe is empty
+                    print("No funds in fund_basic, attempting to sync...")
+                    from src.data_sources.tushare_client import sync_fund_basic
+                    sync_fund_basic()
+                    all_codes = self._get_all_fund_codes(universe=universe)
+                    total = len(all_codes)
+
+            if total == 0:
+                print(f"No funds to process (universe={universe})")
+                return {'trade_date': trade_date, 'universe': universe, 'total': 0, 'success': 0, 'failure': 0}
 
             self._update_progress(
                 total=total,
@@ -389,6 +458,7 @@ class DailyFactorComputer:
 
             result = {
                 'trade_date': trade_date,
+                'universe': universe,
                 'total': total,
                 'success': total_success,
                 'failure': total_failure,
@@ -444,8 +514,8 @@ def run_daily_computation():
         return
 
     # Compute stock factors first
-    stock_result = daily_computer.compute_all_stock_factors(trade_date)
-    print(f"Stock factors: {stock_result}")
+    #stock_result = daily_computer.compute_all_stock_factors(trade_date)
+    #print(f"Stock factors: {stock_result}")
 
     # Then compute fund factors
     fund_result = daily_computer.compute_all_fund_factors(trade_date)

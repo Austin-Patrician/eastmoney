@@ -495,6 +495,36 @@ def init_db():
     c.execute('CREATE INDEX IF NOT EXISTS idx_rec_perf_type ON recommendation_performance(rec_type)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_rec_perf_status ON recommendation_performance(evaluation_status)')
 
+    # 24. Create Fund Basic Table (TuShare fund_basic cache - 全市场基金列表)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS fund_basic (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts_code TEXT UNIQUE NOT NULL,
+            code TEXT NOT NULL,
+            name TEXT NOT NULL,
+            fund_type TEXT,
+            invest_type TEXT,
+            market TEXT,
+            management TEXT,
+            custodian TEXT,
+            found_date TEXT,
+            list_date TEXT,
+            delist_date TEXT,
+            m_fee REAL,
+            c_fee REAL,
+            status TEXT DEFAULT 'L',
+            benchmark TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Create indexes for fund_basic
+    c.execute('CREATE INDEX IF NOT EXISTS idx_fund_basic_code ON fund_basic(code)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_fund_basic_name ON fund_basic(name)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_fund_basic_type ON fund_basic(fund_type)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_fund_basic_market ON fund_basic(market)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_fund_basic_status ON fund_basic(status)')
+
     # 3. Migration: Add user_id to funds if not exists
     try:
         c.execute('ALTER TABLE funds ADD COLUMN user_id INTEGER REFERENCES users(id)')
@@ -1616,6 +1646,176 @@ def get_stock_basic_last_updated() -> Optional[str]:
     """Get the last update timestamp from stock_basic table."""
     conn = get_db_connection()
     row = conn.execute('SELECT MAX(updated_at) FROM stock_basic').fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+
+# --- Fund Basic Operations (TuShare fund_basic cache - 全市场基金列表) ---
+
+def upsert_fund_basic_batch(funds: List[Dict]) -> int:
+    """
+    Batch insert/update fund basic info.
+
+    Args:
+        funds: List of dicts with keys from TuShare fund_basic API:
+               ts_code, name, management, custodian, fund_type, found_date,
+               list_date, delist_date, m_fee, c_fee, status, benchmark,
+               invest_type, market, etc.
+
+    Returns:
+        Number of funds inserted/updated
+    """
+    if not funds:
+        return 0
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    count = 0
+    for fund in funds:
+        try:
+            ts_code = fund.get('ts_code', '')
+            # Extract pure code from ts_code (e.g., '000001.OF' -> '000001')
+            code = ts_code.split('.')[0] if ts_code else ''
+
+            c.execute('''
+                INSERT OR REPLACE INTO fund_basic
+                (ts_code, code, name, fund_type, invest_type, market, management,
+                 custodian, found_date, list_date, delist_date, m_fee, c_fee,
+                 status, benchmark, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (
+                ts_code,
+                code,
+                fund.get('name', ''),
+                fund.get('fund_type'),
+                fund.get('invest_type'),
+                fund.get('market'),
+                fund.get('management'),
+                fund.get('custodian'),
+                fund.get('found_date'),
+                fund.get('list_date'),
+                fund.get('delist_date'),
+                fund.get('m_fee'),
+                fund.get('c_fee'),
+                fund.get('status', 'L'),
+                fund.get('benchmark'),
+            ))
+            count += 1
+        except Exception as e:
+            print(f"Error inserting fund {fund.get('ts_code')}: {e}")
+            continue
+
+    conn.commit()
+    conn.close()
+    return count
+
+
+def search_fund_basic(query: str, market: str = None, limit: int = 50) -> List[Dict]:
+    """
+    Search funds by code prefix or name (fuzzy match).
+
+    Args:
+        query: Search query (code prefix or name substring)
+        market: Filter by market ('E'=场内, 'O'=场外), None for all
+        limit: Maximum number of results
+
+    Returns:
+        List of matching funds
+    """
+    conn = get_db_connection()
+
+    base_conditions = ["status = 'L'"]
+    params = []
+
+    if market:
+        base_conditions.append("market = ?")
+        params.append(market)
+
+    if query:
+        query_lower = query.lower()
+        base_conditions.append("(code LIKE ? OR LOWER(name) LIKE ? OR LOWER(fund_type) LIKE ?)")
+        params.extend([f'{query}%', f'%{query_lower}%', f'%{query_lower}%'])
+
+    params.append(limit)
+
+    sql = f'''
+        SELECT ts_code, code, name, fund_type, invest_type, market,
+               management, custodian, found_date, m_fee, c_fee, status
+        FROM fund_basic
+        WHERE {' AND '.join(base_conditions)}
+        ORDER BY code
+        LIMIT ?
+    '''
+
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+
+    return [dict(row) for row in rows]
+
+
+def get_all_fund_basic_codes(market: str = None, status: str = 'L') -> List[str]:
+    """
+    Get all fund codes from fund_basic table.
+
+    Args:
+        market: Filter by market ('E'=场内, 'O'=场外), None for all
+        status: Filter by status ('L'=正常), None for all
+
+    Returns:
+        List of fund codes (pure code, not ts_code)
+    """
+    conn = get_db_connection()
+
+    conditions = []
+    params = []
+
+    if status:
+        conditions.append("status = ?")
+        params.append(status)
+
+    if market:
+        conditions.append("market = ?")
+        params.append(market)
+
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    rows = conn.execute(
+        f'SELECT code FROM fund_basic {where_clause} ORDER BY code',
+        params
+    ).fetchall()
+    conn.close()
+
+    return [r[0] for r in rows]
+
+
+def get_fund_basic_count(market: str = None) -> int:
+    """
+    Get count of funds in fund_basic table.
+
+    Args:
+        market: Filter by market ('E'=场内, 'O'=场外), None for all
+    """
+    conn = get_db_connection()
+
+    if market:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM fund_basic WHERE status = 'L' AND market = ?",
+            (market,)
+        ).fetchone()[0]
+    else:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM fund_basic WHERE status = 'L'"
+        ).fetchone()[0]
+
+    conn.close()
+    return count
+
+
+def get_fund_basic_last_updated() -> Optional[str]:
+    """Get the last update timestamp from fund_basic table."""
+    conn = get_db_connection()
+    row = conn.execute('SELECT MAX(updated_at) FROM fund_basic').fetchone()
     conn.close()
     return row[0] if row and row[0] else None
 

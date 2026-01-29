@@ -71,8 +71,11 @@ class PerformanceFactors:
             if nav_col is None or len(nav_df) < 5:
                 return factors
 
-            # Current NAV
-            current_nav = float(nav_df[nav_col].iloc[-1])
+            # Current NAV - check for None/NaN
+            current_nav_raw = nav_df[nav_col].iloc[-1]
+            if current_nav_raw is None or pd.isna(current_nav_raw):
+                return factors
+            current_nav = float(current_nav_raw)
 
             # Calculate returns for different periods
             periods = {
@@ -85,7 +88,10 @@ class PerformanceFactors:
 
             for period_name, days in periods.items():
                 if len(nav_df) >= days:
-                    past_nav = float(nav_df[nav_col].iloc[-days])
+                    past_nav_raw = nav_df[nav_col].iloc[-days]
+                    if past_nav_raw is None or pd.isna(past_nav_raw) or past_nav_raw == 0:
+                        continue
+                    past_nav = float(past_nav_raw)
                     ret = (current_nav - past_nav) / past_nav * 100
                     factors[f'return_{period_name}'] = round(ret, 4)
 

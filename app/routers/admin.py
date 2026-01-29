@@ -11,7 +11,12 @@ from app.models.auth import User
 from app.core.dependencies import get_current_user
 from src.llm.client import get_llm_client
 from src.data_sources.web_search import WebSearch
-from src.storage.db import get_stock_basic_count, get_stock_basic_last_updated
+from src.storage.db import (
+    get_stock_basic_count,
+    get_stock_basic_last_updated,
+    get_fund_basic_count,
+    get_fund_basic_last_updated,
+)
 
 router = APIRouter(tags=["Admin"])
 
@@ -73,6 +78,40 @@ async def get_stock_basic_status(current_user: User = Depends(get_current_user))
     last_updated = get_stock_basic_last_updated()
     return {
         "count": count,
+        "last_updated": last_updated
+    }
+
+
+@router.post("/api/admin/sync-fund-basic")
+async def sync_fund_basic_endpoint(current_user: User = Depends(get_current_user)):
+    """Manually trigger sync of fund basic info from TuShare (场内+场外基金)."""
+    try:
+        from src.data_sources.tushare_client import sync_fund_basic
+        loop = asyncio.get_running_loop()
+        count = await loop.run_in_executor(None, sync_fund_basic)
+        return {
+            "status": "success",
+            "synced": count,
+            "message": f"Synced {count} funds from TuShare"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+@router.get("/api/admin/fund-basic-status")
+async def get_fund_basic_status(current_user: User = Depends(get_current_user)):
+    """Get status of fund basic table (全市场基金列表)."""
+    count_all = get_fund_basic_count()
+    count_otc = get_fund_basic_count(market='O')
+    count_etf = get_fund_basic_count(market='E')
+    last_updated = get_fund_basic_last_updated()
+    return {
+        "total": count_all,
+        "otc_funds": count_otc,
+        "etf_funds": count_etf,
         "last_updated": last_updated
     }
 

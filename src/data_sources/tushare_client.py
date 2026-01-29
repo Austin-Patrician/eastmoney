@@ -46,7 +46,7 @@ def tushare_call_with_retry(
     **kwargs
 ) -> Optional[pd.DataFrame]:
     """
-    Call TuShare API with exponential backoff retry logic.
+    Call TuShare API with exponential backoff retry logic and rate limiting.
 
     Args:
         api_method: API method name (e.g., 'daily', 'moneyflow_hsgt')
@@ -57,6 +57,13 @@ def tushare_call_with_retry(
     Returns:
         DataFrame with results, or None if all retries failed
     """
+    # Lazy import to avoid circular dependency
+    from src.analysis.recommendation.factor_store.rate_limiter import tushare_rate_limiter
+
+    # Acquire rate limit permission before making API call
+    # Pass the interface name for per-interface rate limiting
+    tushare_rate_limiter.acquire(interface=api_method)
+
     pro = _get_tushare_pro()
 
     for attempt in range(max_retries):
@@ -76,14 +83,14 @@ def tushare_call_with_retry(
             error_msg = str(e)
 
             # Check for rate limit error
-            if "达到每分钟最高限制" in error_msg or "rate limit" in error_msg.lower():
+            if "达到每分钟最高限制" in error_msg or "每分钟最多访问该接口" in error_msg or "rate limit" in error_msg.lower():
                 if attempt < max_retries - 1:
                     wait_time = backoff_factor ** attempt
-                    print(f"TuShare rate limit hit. Waiting {wait_time}s before retry {attempt + 1}/{max_retries}...")
+                    print(f"TuShare rate limit hit for {api_method}. Waiting {wait_time}s before retry {attempt + 1}/{max_retries}...")
                     time.sleep(wait_time)
                     continue
                 else:
-                    print(f"TuShare rate limit exhausted after {max_retries} retries")
+                    print(f"TuShare rate limit exhausted for {api_method} after {max_retries} retries")
                     return None
 
             # Check for authentication error
@@ -97,7 +104,7 @@ def tushare_call_with_retry(
                 print(f"TuShare API error: {error_msg}. Retrying in {wait_time}s...")
                 time.sleep(wait_time)
             else:
-                print(f"TuShare API call failed after {max_retries} retries: {error_msg}")
+                print(f"TuShare API {api_method} call failed after {max_retries} retries: {error_msg}")
                 return None
 
     return None
@@ -625,6 +632,54 @@ def get_stock_basic_from_tushare(symbol: str = None) -> Optional[pd.DataFrame]:
 
     df = tushare_call_with_retry('stock_basic', **params)
     return df
+
+
+def sync_fund_basic() -> int:
+    """
+    Sync all fund basic info from TuShare to local database.
+
+    Fetches fund_basic for both 场内(E) and 场外(O) markets and upserts to database.
+
+    Returns:
+        Number of funds synced
+    """
+    from src.storage.db import upsert_fund_basic_batch
+
+    pro = _get_tushare_pro()
+
+    all_funds = []
+
+    print("Syncing fund basic info from TuShare...")
+
+    # Fetch 场内基金 (Exchange-traded: ETF, LOF, etc.)
+    try:
+        df_e = pro.fund_basic(market='E')
+        if df_e is not None and not df_e.empty:
+            funds_e = df_e.to_dict('records')
+            all_funds.extend(funds_e)
+            print(f"  Fetched {len(funds_e)} exchange-traded funds (场内)")
+    except Exception as e:
+        print(f"Error fetching fund_basic (market=E): {e}")
+
+    # Fetch 场外基金 (OTC: open-end funds)
+    try:
+        df_o = pro.fund_basic(market='O')
+        if df_o is not None and not df_o.empty:
+            funds_o = df_o.to_dict('records')
+            all_funds.extend(funds_o)
+            print(f"  Fetched {len(funds_o)} OTC funds (场外)")
+    except Exception as e:
+        print(f"Error fetching fund_basic (market=O): {e}")
+
+    if not all_funds:
+        print("No funds fetched from TuShare")
+        return 0
+
+    # Upsert to database
+    count = upsert_fund_basic_batch(all_funds)
+    print(f"Synced {count} funds to database")
+
+    return count
 
 
 # ============================================================================
