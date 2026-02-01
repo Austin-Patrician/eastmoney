@@ -33,7 +33,6 @@ export default function GoldMacroWidget({ id, config, isEditing }: WidgetProps) 
     return (
         <WidgetContainer
             config={config}
-            isEditing={isEditing}
             loading={loading}
             error={error}
             onRefresh={refresh}

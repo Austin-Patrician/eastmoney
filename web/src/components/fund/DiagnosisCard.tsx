@@ -18,13 +18,14 @@ import PersonIcon from '@mui/icons-material/Person';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer } from 'recharts';
 import { fetchFundDiagnosis } from '../../api';
 import type { FundDiagnosisResponse } from '../../api';
+import type { ReactElement } from 'react';
 
 interface DiagnosisCardProps {
   code: string;
   fundName: string;
 }
 
-const dimensionIcons: Record<string, JSX.Element> = {
+const dimensionIcons: Record<string, ReactElement> = {
   'profitability': <TrendingUpIcon fontSize="small" />,
   'risk_resistance': <ShieldIcon fontSize="small" />,
   'stability': <BalanceIcon fontSize="small" />,

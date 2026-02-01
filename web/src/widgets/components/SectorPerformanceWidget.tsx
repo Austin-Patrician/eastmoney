@@ -83,7 +83,6 @@ export default function SectorPerformanceWidget({ id, config, isEditing }: Widge
     return (
         <WidgetContainer
             config={config}
-            isEditing={isEditing}
             loading={loading}
             error={error || data?.error}
             onRefresh={refresh}

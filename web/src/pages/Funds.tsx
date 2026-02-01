@@ -69,7 +69,7 @@ import {
   fetchBatchEstimation,
 } from '../api';
 
-import type { MarketFund, FundItem, FundComparisonResponse, FundEstimation } from '../api';
+import type { MarketFund, FundItem, FundComparisonResponse, BatchFundEstimation } from '../api';
 import { useAppContext } from '../contexts/AppContext';
 import { FundMarketOverview, FundRankingTable, FundDetailDialog } from '../components/fund';
 
@@ -131,7 +131,7 @@ export default function FundsPage() {
   const [compareTab, setCompareTab] = useState(0);
 
   // Real-time Estimation State
-  const [estimations, setEstimations] = useState<Record<string, FundEstimation>>({});
+  const [estimations, setEstimations] = useState<Record<string, BatchFundEstimation>>({});
   const [estimationLoading, setEstimationLoading] = useState(false);
   const [isTrading, setIsTrading] = useState(false);
   const [lastEstimationUpdate, setLastEstimationUpdate] = useState<string | null>(null);
@@ -324,7 +324,7 @@ export default function FundsPage() {
       const result = await fetchBatchEstimation(codes);
       
       // Build map by code for easy lookup
-      const estimationMap: Record<string, FundEstimation> = {};
+      const estimationMap: Record<string, BatchFundEstimation> = {};
       result.estimations.forEach(est => {
         estimationMap[est.code] = est;
       });

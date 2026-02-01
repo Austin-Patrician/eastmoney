@@ -191,10 +191,7 @@ const CorrelationHeatmap: React.FC<CorrelationHeatmapProps> = ({
               return val.toFixed(2);
             },
             fontSize: 9,
-            color: (params: any) => {
-              const val = params.value[2];
-              return Math.abs(val) > 0.6 ? '#fff' : theme.palette.text.primary;
-            },
+            color: theme.palette.text.primary,
           },
           emphasis: {
             itemStyle: {

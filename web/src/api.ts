@@ -1874,7 +1874,7 @@ export const compareFundsAdvanced = async (codes: string[]): Promise<FundCompari
 
 // ==================== Fund Batch Estimation API ====================
 
-export interface FundEstimation {
+export interface BatchFundEstimation {
     code: string;
     name: string | null;
     estimated_nav: number | null;
@@ -1886,7 +1886,7 @@ export interface FundEstimation {
 }
 
 export interface BatchEstimationResponse {
-    estimations: FundEstimation[];
+    estimations: BatchFundEstimation[];
     is_trading: boolean;
     cache_ttl: number;
     timestamp: string;

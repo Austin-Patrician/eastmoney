@@ -38,7 +38,6 @@ export default function AbnormalMovementsWidget({ id, config, isEditing }: Widge
     return (
         <WidgetContainer
             config={config}
-            isEditing={isEditing}
             loading={loading}
             error={error}
             onRefresh={refresh}

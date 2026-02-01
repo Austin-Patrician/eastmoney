@@ -8,7 +8,6 @@ import {
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import GridLayout from 'react-grid-layout';
-
 import type { Layout } from 'react-grid-layout';
 
 import 'react-grid-layout/css/styles.css';
@@ -56,7 +55,7 @@ export default function DashboardPage() {
     }, []);
 
     // Convert widgets to react-grid-layout format (static layout)
-    const layoutItems: Layout[] = DEFAULT_WIDGETS.map((w) => ({
+    const layoutItems = DEFAULT_WIDGETS.map((w) => ({
         i: w.id,
         x: w.position.x,
         y: w.position.y,
@@ -101,14 +100,18 @@ export default function DashboardPage() {
                 <GridLayout
                     className="layout"
                     layout={layoutItems}
-                    cols={12}
-                    rowHeight={70}
                     width={containerWidth}
-                    isDraggable={false}
-                    isResizable={false}
-                    compactType="vertical"
-                    preventCollision={false}
-                    margin={[12, 12]}
+                    gridConfig={{
+                        cols: 12,
+                        rowHeight: 70,
+                        margin: [12, 12],
+                    }}
+                    dragConfig={{
+                        enabled: false,
+                    }}
+                    resizeConfig={{
+                        enabled: false,
+                    }}
                 >
                     {DEFAULT_WIDGETS.map((widget) => {
                         const WidgetComponent = getWidgetComponent(widget.type);

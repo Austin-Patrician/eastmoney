@@ -364,7 +364,7 @@ export default function FundMarketOverview() {
         </Box>
         <Grid container spacing={2}>
           {[1, 2, 3, 4].map((i) => (
-            <Grid size={12} sm={6} md={3} key={i}>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }} key={i}>
               <Skeleton variant="rounded" height={140} sx={{ borderRadius: '12px' }} />
             </Grid>
           ))}
@@ -440,7 +440,7 @@ export default function FundMarketOverview() {
       <Grid container spacing={3}>
         {/* 行业板块 */}
         {sectors && (
-          <Grid size={12} md={6}>
+          <Grid size={{ xs: 12, md: 6 }}>
             <Paper
               elevation={0}
               sx={{
@@ -477,10 +477,10 @@ export default function FundMarketOverview() {
         )}
 
         {/* 资金流向 & 市场情绪 */}
-        <Grid size={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Grid container spacing={2} sx={{ height: '100%' }}>
             {/* 北向资金 */}
-            <Grid size={12}>
+            <Grid size={{ xs: 12 }}>
               <Paper
                 elevation={0}
                 sx={{

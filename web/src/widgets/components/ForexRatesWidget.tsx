@@ -25,7 +25,6 @@ export default function ForexRatesWidget({ id, config, isEditing }: WidgetProps)
     return (
         <WidgetContainer
             config={config}
-            isEditing={isEditing}
             loading={loading}
             error={error || data?.error}
             onRefresh={refresh}

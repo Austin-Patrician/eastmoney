@@ -7,7 +7,8 @@
  * - Refresh button
  */
 
-import { useState, useEffect, useCallback, useRef, ReactNode } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import type { ReactNode } from 'react';
 import { Box, Paper, Typography, IconButton, CircularProgress, Tooltip, Fade } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useTranslation } from 'react-i18next';

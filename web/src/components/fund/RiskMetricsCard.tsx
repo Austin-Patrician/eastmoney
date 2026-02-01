@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import type { ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Box,
@@ -28,7 +29,7 @@ interface MetricCardProps {
   unit?: string;
   rating?: string;
   description?: string;
-  icon: JSX.Element;
+  icon: ReactElement;
   inverted?: boolean; // For metrics where lower is better
 }
 

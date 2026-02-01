@@ -25,7 +25,6 @@ export default function IndustryFlowWidget({ id, config, isEditing }: WidgetProp
     return (
         <WidgetContainer
             config={config}
-            isEditing={isEditing}
             loading={loading}
             error={error || data?.error}
             onRefresh={refresh}

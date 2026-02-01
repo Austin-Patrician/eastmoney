@@ -42,7 +42,6 @@ export default function MainCapitalFlowWidget({ id, config, isEditing }: WidgetP
     return (
         <WidgetContainer
             config={config}
-            isEditing={isEditing}
             loading={loading}
             error={error}
             onRefresh={refresh}
