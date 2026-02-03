@@ -127,12 +127,12 @@ class SchedulerManager:
             print(f"Error refreshing dashboard cache: {e}")
 
     def add_daily_snapshot_job(self):
-        """Schedule daily portfolio snapshot creation at 17:00 (after market close)"""
+        """Schedule daily portfolio snapshot creation at 23:00 (after market close)"""
         job_id = "daily_portfolio_snapshots"
         if not self.scheduler.get_job(job_id):
             self.scheduler.add_job(
                 self.create_all_portfolio_snapshots,
-                trigger=CronTrigger(hour=10, minute=34),
+                trigger=CronTrigger(hour=23, minute=0),
                 id=job_id,
                 replace_existing=True,
                 max_instances=1,

@@ -524,8 +524,8 @@ def run_daily_computation():
         return
 
     # Compute stock factors first
-    #stock_result = daily_computer.compute_all_stock_factors(trade_date)
-    #print(f"Stock factors: {stock_result}")
+    stock_result = daily_computer.compute_all_stock_factors(trade_date)
+    print(f"Stock factors: {stock_result}")
 
     # Then compute fund factors
     fund_result = daily_computer.compute_all_fund_factors(trade_date)
