@@ -470,7 +470,7 @@ server {
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=AustinDeng/VAlpha-Terminal&type=Date)](https://star-history.com/#AustinDeng/VAlpha-Terminal&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Austin-Patrician/eastmoney&type=Date)](https://star-history.com/#Austin-Patrician/eastmoney&Date)
 
 ---
 
