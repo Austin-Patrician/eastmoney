@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.storage.db import init_db, get_stock_basic_count
 from src.scheduler.manager import scheduler_manager
+from src.services.itick_ws_gateway import itick_stock_ws_gateway
 
 from app.routers import (
     health_router, auth_router, settings_router, funds_router,
@@ -76,6 +77,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     print("Shutting down...")
+    await itick_stock_ws_gateway.stop()
     scheduler_manager.shutdown()
     print("[OK] Scheduler stopped")
 

@@ -51,6 +51,7 @@ import EventIcon from '@mui/icons-material/Event';
 import SpeedIcon from '@mui/icons-material/Speed';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import FilterListIcon from '@mui/icons-material/FilterList';
+import TimelineIcon from '@mui/icons-material/Timeline';
 
 import {
   fetchStocks,
@@ -75,7 +76,79 @@ import {
   MarketPulseCard,
   HotStocksList,
   LimitPoolTabs,
+  LiveMonitorTab,
 } from '../components/stock';
+
+function AIBriefBanner() {
+  const { t } = useTranslation();
+  const theme = useTheme();
+  const [brief, setBrief] = useState<MarketAIBrief | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await fetchMarketAIBrief();
+        setBrief(res);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, []);
+
+  if (loading) return null;
+  if (!brief) return null;
+
+  return (
+    <Paper
+      elevation={0}
+      sx={{
+        p: 2,
+        borderRadius: 3,
+        bgcolor: alpha(theme.palette.primary.main, 0.03),
+        border: '1px dashed',
+        borderColor: alpha(theme.palette.primary.main, 0.2),
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 2,
+        mb: 1 
+      }}
+    >
+      <AutoAwesomeIcon sx={{ color: 'primary.main', fontSize: 20, mt: 0.3 }} />
+      <Box>
+        <Typography variant="subtitle2" sx={{ fontWeight: 800, color: 'primary.main', mb: 0.5 }}>
+          {t('stocks.market.ai_brief_title')}
+        </Typography>
+        <Typography variant="body2" sx={{ color: 'text.primary', lineHeight: 1.6 }}>
+          {brief.brief}
+        </Typography>
+        {brief.top_industries && brief.top_industries.length > 0 && (
+          <Box sx={{ mt: 1.5, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+            {brief.top_industries.map((ind, idx) => (
+              <Chip
+                key={idx}
+                label={`${ind.name}`}
+                size="small"
+                sx={{
+                  height: 20,
+                  fontSize: '0.7rem',
+                  fontWeight: 600,
+                  bgcolor: alpha('#ef4444', 0.08),
+                  color: '#ef4444',
+                  border: '1px solid',
+                  borderColor: alpha('#ef4444', 0.2),
+                }}
+              />
+            ))}
+          </Box>
+        )}
+      </Box>
+    </Paper>
+  );
+}
 
 export default function StocksPage() {
   const { t } = useTranslation();
@@ -83,6 +156,7 @@ export default function StocksPage() {
   const { setCurrentPage, setCurrentStock } = useAppContext();
   const [stocks, setStocks] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [lastRealtimeUpdate, setLastRealtimeUpdate] = useState<string>('');
   
   // Unified Dialog State (Add/Edit)
   const [openDialog, setOpenDialog] = useState(false);
@@ -196,6 +270,23 @@ export default function StocksPage() {
     }
   };
 
+  const loadStocks = async (silent: boolean = false) => {
+    if (!silent) {
+      setLoading(true);
+    }
+    try {
+      const data = await fetchStocks();
+      setStocks(data);
+      setLastRealtimeUpdate(new Date().toLocaleTimeString());
+    } catch (error) {
+      console.error(error);
+    } finally {
+      if (!silent) {
+        setLoading(false);
+      }
+    }
+  };
+
   useEffect(() => {
     setCurrentPage('stocks');
     loadStocks();
@@ -205,17 +296,15 @@ export default function StocksPage() {
     };
   }, []);
 
-  const loadStocks = async () => {
-    setLoading(true);
-    try {
-      const data = await fetchStocks();
-      setStocks(data);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadStocks(true);
+      }
+    }, 10000);
+
+    return () => window.clearInterval(timer);
+  }, []);
 
   const handleDelete = async (code: string) => {
     if (window.confirm(t('stocks.messages.delete_confirm'))) {
@@ -254,6 +343,30 @@ export default function StocksPage() {
       setLoadingDetails(false);
     }
   };
+
+  useEffect(() => {
+    if (!detailOpen || !selectedStock) {
+      return;
+    }
+
+    const timer = window.setInterval(async () => {
+      if (document.visibilityState !== 'visible') {
+        return;
+      }
+      try {
+        const details = await fetchStockDetails(selectedStock.code);
+        setStockDetails((prev) => ({
+          ...(prev || {}),
+          ...details,
+          info: details?.info || prev?.info || {}
+        }));
+      } catch (error) {
+        console.error('Failed to refresh stock quote', error);
+      }
+    }, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [detailOpen, selectedStock?.code]);
 
   const handleAnalyzeStock = async (stock: StockItem, mode: 'pre' | 'post') => {
     handleCloseMenu();
@@ -314,78 +427,6 @@ export default function StocksPage() {
       </Box>
     );
   };
-
-// --- Local Component: AI Brief Banner ---
-function AIBriefBanner() {
-  const { t } = useTranslation();
-  const theme = useTheme();
-  const [brief, setBrief] = useState<MarketAIBrief | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const res = await fetchMarketAIBrief();
-        setBrief(res);
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
-  }, []);
-
-  if (loading) return null; // Or a skeleton
-  if (!brief) return null;
-
-  return (
-    <Paper
-      elevation={0}
-      sx={{
-        p: 2,
-        borderRadius: 3,
-        bgcolor: alpha(theme.palette.primary.main, 0.03),
-        border: '1px dashed',
-        borderColor: alpha(theme.palette.primary.main, 0.2),
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 2,
-        mb: 1 
-      }}
-    >
-      <AutoAwesomeIcon sx={{ color: 'primary.main', fontSize: 20, mt: 0.3 }} />
-      <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 800, color: 'primary.main', mb: 0.5 }}>
-          {t('stocks.market.ai_brief_title')}
-        </Typography>
-        <Typography variant="body2" sx={{ color: 'text.primary', lineHeight: 1.6 }}>
-          {brief.brief}
-        </Typography>
-        {brief.top_industries && brief.top_industries.length > 0 && (
-          <Box sx={{ mt: 1.5, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-            {brief.top_industries.map((ind, idx) => (
-              <Chip
-                key={idx}
-                label={`${ind.name}`}
-                size="small"
-                sx={{
-                  height: 20,
-                  fontSize: '0.7rem',
-                  fontWeight: 600,
-                  bgcolor: alpha('#ef4444', 0.08),
-                  color: '#ef4444',
-                  border: '1px solid',
-                  borderColor: alpha('#ef4444', 0.2),
-                }}
-              />
-            ))}
-          </Box>
-        )}
-      </Box>
-    </Paper>
-  );
-}
 
   return (
     <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 3, pb: 4 }}>
@@ -470,7 +511,9 @@ function AIBriefBanner() {
               sx={{ ml: 1, height: 20, fontSize: '0.75rem', fontWeight: 600, bgcolor: alpha(theme.palette.divider, 0.1) }} 
             />
           </Box>
-          {/* Future: Add Sort/Filter controls here */}
+          <Typography variant="caption" sx={{ color: 'text.secondary', fontFamily: 'JetBrains Mono', fontWeight: 600 }}>
+            {lastRealtimeUpdate ? `Last update ${lastRealtimeUpdate}` : ''}
+          </Typography>
         </Box>
 
         {loading ? (
@@ -856,6 +899,7 @@ function AIBriefBanner() {
             }}
           >
             <Tab icon={<ShowChartIcon sx={{ fontSize: 18 }} />} iconPosition="start" label={t('stocks.tabs.overview')} />
+            <Tab icon={<TimelineIcon sx={{ fontSize: 18 }} />} iconPosition="start" label={t('stocks.tabs.live')} />
             <Tab icon={<AccountBalanceIcon sx={{ fontSize: 18 }} />} iconPosition="start" label={t('stocks.tabs.financial')} />
             <Tab icon={<GroupsIcon sx={{ fontSize: 18 }} />} iconPosition="start" label={t('stocks.tabs.shareholder')} />
             <Tab icon={<CandlestickChartIcon sx={{ fontSize: 18 }} />} iconPosition="start" label={t('stocks.tabs.margin')} />
@@ -956,36 +1000,43 @@ function AIBriefBanner() {
             )
           )}
 
-          {/* Tab 1: Financial Analysis */}
+          {/* Tab 1: Live Monitor */}
           {detailTab === 1 && selectedStock && (
+            <Box sx={{ p: 3 }}>
+              <LiveMonitorTab code={selectedStock.code} market={selectedStock.market} />
+            </Box>
+          )}
+
+          {/* Tab 2: Financial Analysis */}
+          {detailTab === 2 && selectedStock && (
             <Box sx={{ p: 3 }}>
               <FinancialTab code={selectedStock.code} />
             </Box>
           )}
 
-          {/* Tab 2: Shareholder Analysis */}
-          {detailTab === 2 && selectedStock && (
+          {/* Tab 3: Shareholder Analysis */}
+          {detailTab === 3 && selectedStock && (
             <Box sx={{ p: 3 }}>
               <ShareholderTab code={selectedStock.code} />
             </Box>
           )}
 
-          {/* Tab 3: Margin/Leverage */}
-          {detailTab === 3 && selectedStock && (
+          {/* Tab 4: Margin/Leverage */}
+          {detailTab === 4 && selectedStock && (
             <Box sx={{ p: 3 }}>
               <MarginTab code={selectedStock.code} />
             </Box>
           )}
 
-          {/* Tab 4: Events Calendar */}
-          {detailTab === 4 && selectedStock && (
+          {/* Tab 5: Events Calendar */}
+          {detailTab === 5 && selectedStock && (
             <Box sx={{ p: 3 }}>
               <EventsTab code={selectedStock.code} />
             </Box>
           )}
 
-          {/* Tab 5: Quantitative Signals */}
-          {detailTab === 5 && selectedStock && (
+          {/* Tab 6: Quantitative Signals */}
+          {detailTab === 6 && selectedStock && (
             <Box sx={{ p: 3 }}>
               <QuantTab code={selectedStock.code} />
             </Box>

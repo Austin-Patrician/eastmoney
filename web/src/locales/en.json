@@ -603,11 +603,36 @@
     },
     "tabs": {
       "overview": "Overview",
+      "live": "Live Monitor",
       "financial": "Financial",
       "shareholder": "Shareholders",
       "margin": "Leverage",
       "events": "Events",
       "quant": "Quant"
+    },
+    "live": {
+      "title": "Realtime Monitor",
+      "no_token": "No login token found. Please sign in again.",
+      "last_update": "Last Update",
+      "price_board": "Realtime Quote",
+      "intraday": "Intraday Trend",
+      "order_book": "Order Book",
+      "tape": "Tape",
+      "no_realtime": "Waiting for realtime data...",
+      "time": "Time",
+      "price": "Price",
+      "volume": "Volume",
+      "side": "Side",
+      "ask": "Ask",
+      "bid": "Bid",
+      "prev_close": "Prev Close",
+      "turnover": "Turnover",
+      "status": {
+        "connecting": "Connecting",
+        "connected": "Connected",
+        "disconnected": "Disconnected",
+        "error": "Connection Error"
+      }
     },
     "professional": {
       "load_error": "Failed to load data",
@@ -1217,4 +1242,3 @@
     "no_context": "No specific context"
   }
 }
-

@@ -34,9 +34,13 @@ export default function HotStocksList({ onStockClick, limit = 15 }: HotStocksLis
   const [error, setError] = useState<string | null>(null);
   const [updateTime, setUpdateTime] = useState<string>('');
 
-  const loadData = async () => {
-    setLoading(true);
-    setError(null);
+  const loadData = async (silent: boolean = false) => {
+    if (!silent) {
+      setLoading(true);
+    }
+    if (!silent) {
+      setError(null);
+    }
     try {
       const result = await fetchHotStocks(limit);
       setData(result.items);
@@ -45,12 +49,22 @@ export default function HotStocksList({ onStockClick, limit = 15 }: HotStocksLis
       setError(t('stocks.market.load_error'));
       console.error('Failed to load hot stocks:', err);
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     loadData();
+
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadData(true);
+      }
+    }, 15000);
+
+    return () => window.clearInterval(timer);
   }, [limit]);
 
   const formatChange = (value: number): string => {
@@ -83,7 +97,7 @@ export default function HotStocksList({ onStockClick, limit = 15 }: HotStocksLis
     return (
       <Paper sx={{ p: 2, textAlign: 'center', height: '100%', borderRadius: 3 }}>
         <Typography color="error">{error}</Typography>
-        <IconButton onClick={loadData} size="small" sx={{ mt: 1 }}>
+        <IconButton onClick={() => loadData()} size="small" sx={{ mt: 1 }}>
           <RefreshIcon />
         </IconButton>
       </Paper>
@@ -117,7 +131,7 @@ export default function HotStocksList({ onStockClick, limit = 15 }: HotStocksLis
             {updateTime}
           </Typography>
           <Tooltip title={t('common.refresh')}>
-            <IconButton size="small" onClick={loadData}>
+            <IconButton size="small" onClick={() => loadData()}>
               <RefreshIcon fontSize="small" />
             </IconButton>
           </Tooltip>

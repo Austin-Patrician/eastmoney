@@ -40,9 +40,11 @@ export default function LimitPoolTabs({ onStockClick, limit = 20 }: LimitPoolTab
   const [error, setError] = useState<string | null>(null);
   const [updateTime, setUpdateTime] = useState<string>('');
 
-  const loadData = async () => {
-    setLoading(true);
-    setError(null);
+  const loadData = async (silent: boolean = false) => {
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const [upResult, downResult] = await Promise.all([
         fetchLimitUpStocks(limit),
@@ -55,12 +57,22 @@ export default function LimitPoolTabs({ onStockClick, limit = 20 }: LimitPoolTab
       setError(t('stocks.market.load_error'));
       console.error('Failed to load limit pool:', err);
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     loadData();
+
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadData(true);
+      }
+    }, 15000);
+
+    return () => window.clearInterval(timer);
   }, [limit]);
 
   const formatTime = (time: string): string => {
@@ -94,7 +106,7 @@ export default function LimitPoolTabs({ onStockClick, limit = 20 }: LimitPoolTab
     return (
       <Paper sx={{ p: 2, textAlign: 'center', height: '100%', borderRadius: 3 }}>
         <Typography color="error">{error}</Typography>
-        <IconButton onClick={loadData} size="small" sx={{ mt: 1 }}>
+        <IconButton onClick={() => loadData()} size="small" sx={{ mt: 1 }}>
           <RefreshIcon />
         </IconButton>
       </Paper>
@@ -195,7 +207,7 @@ export default function LimitPoolTabs({ onStockClick, limit = 20 }: LimitPoolTab
             {updateTime}
           </Typography>
           <Tooltip title={t('common.refresh')}>
-            <IconButton size="small" onClick={loadData}>
+            <IconButton size="small" onClick={() => loadData()}>
               <RefreshIcon fontSize="small" />
             </IconButton>
           </Tooltip>

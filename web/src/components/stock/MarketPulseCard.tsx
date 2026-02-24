@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Box, Typography, Stack, Skeleton, useTheme } from '@mui/material';
+import { Box, Typography, Skeleton } from '@mui/material';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import TrendingDownIcon from '@mui/icons-material/TrendingDown';
 import { useTranslation } from 'react-i18next';
@@ -25,26 +25,40 @@ interface MarketPulseCardProps {
 }
 
 export default function MarketPulseCard({ onRefresh }: MarketPulseCardProps) {
-    const { t, i18n } = useTranslation();
+    const { i18n } = useTranslation();
     const isZh = i18n.language === 'zh';
-    const theme = useTheme();
     
     // Data State
     const [data, setData] = useState<MarketOverviewData | null>(null);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        const loadData = async () => {
+    const loadData = async (silent: boolean = false) => {
+            if (!silent) {
+                setLoading(true);
+            }
             try {
                 const res = await fetchDashboardOverview();
                 setData(res);
+                onRefresh?.();
             } catch (error) {
                 console.error("Failed to load market pulse", error);
             } finally {
-                setLoading(false);
+                if (!silent) {
+                    setLoading(false);
+                }
             }
         };
+
+    useEffect(() => {
         loadData();
+
+        const timer = window.setInterval(() => {
+            if (document.visibilityState === 'visible') {
+                loadData(true);
+            }
+        }, 15000);
+
+        return () => window.clearInterval(timer);
     }, []);
 
     if (loading) {

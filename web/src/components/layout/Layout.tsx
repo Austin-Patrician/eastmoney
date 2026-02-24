@@ -521,7 +521,13 @@ export default function Layout() {
                 {/* Real-time Indices with Fixed Width to prevent jitter */}
                 <Box sx={{ display: 'flex', gap: 1 }}>
                     {indices.map((idx, i) => {
-                        const isUp = idx.change_pct >= 0;
+                    const price = Number(idx.price);
+                    const changePct = Number(idx.change_pct);
+                    const changeVal = Number(idx.change_val);
+                    const hasPrice = Number.isFinite(price);
+                    const hasChangePct = Number.isFinite(changePct);
+                    const hasChangeVal = Number.isFinite(changeVal);
+                    const isUp = hasChangePct ? changePct >= 0 : true;
                         const color = isUp ? '#ef4444' : '#22c55e';
                         return (
                             <Box key={idx.code} sx={{ 
@@ -535,7 +541,7 @@ export default function Layout() {
                                 <Box>
                                     <Typography sx={{ fontSize: '0.65rem', fontWeight: 800, color: '#94a3b8', whiteSpace: 'nowrap' }}>{idx.name}</Typography>
                                     <Typography sx={{ fontSize: '0.9rem', fontWeight: 900, fontFamily: 'JetBrains Mono', color: '#1e293b', lineHeight: 1.2 }}>
-                                        {idx.price.toFixed(2)}
+                                    {hasPrice ? price.toFixed(2) : '--'}
                                     </Typography>
                                 </Box>
                                 <Box sx={{ 
@@ -548,11 +554,11 @@ export default function Layout() {
                                     <Box sx={{ display: 'flex', alignItems: 'center' }}>
                                         {isUp ? <ArrowDropUpIcon sx={{ fontSize: 18 }} /> : <ArrowDropDownIcon sx={{ fontSize: 18 }} />}
                                         <Typography sx={{ fontSize: '0.75rem', fontWeight: 900, fontFamily: 'JetBrains Mono' }}>
-                                            {Math.abs(idx.change_pct).toFixed(2)}%
+                                      {hasChangePct ? `${Math.abs(changePct).toFixed(2)}%` : '--'}
                                         </Typography>
                                     </Box>
                                     <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, fontFamily: 'JetBrains Mono', mt: -0.5 }}>
-                                        {isUp ? '+' : ''}{idx.change_val.toFixed(2)}
+                                    {hasChangeVal ? `${isUp ? '+' : ''}${changeVal.toFixed(2)}` : '--'}
                                     </Typography>
                                 </Box>
                             </Box>

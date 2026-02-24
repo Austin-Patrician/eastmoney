@@ -601,11 +601,36 @@
     },
     "tabs": {
       "overview": "概览",
+      "live": "实时盯盘",
       "financial": "财务分析",
       "shareholder": "股东分析",
       "margin": "杠杆资金",
       "events": "事件日历",
       "quant": "量化信号"
+    },
+    "live": {
+      "title": "实盘盯盘",
+      "no_token": "未检测到登录信息，请重新登录。",
+      "last_update": "最后更新",
+      "price_board": "实时行情",
+      "intraday": "分时走势",
+      "order_book": "盘口五档",
+      "tape": "逐笔成交",
+      "no_realtime": "等待实时数据...",
+      "time": "时间",
+      "price": "价格",
+      "volume": "成交量",
+      "side": "方向",
+      "ask": "卖",
+      "bid": "买",
+      "prev_close": "昨收",
+      "turnover": "成交额",
+      "status": {
+        "connecting": "连接中",
+        "connected": "已连接",
+        "disconnected": "已断开",
+        "error": "连接异常"
+      }
     },
     "professional": {
       "load_error": "加载数据失败",
@@ -1215,4 +1240,3 @@
     "no_context": "暂无上下文"
   }
 }
-

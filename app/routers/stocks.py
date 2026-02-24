@@ -5,19 +5,23 @@ from glob import glob
 import json
 import asyncio
 import os
-from typing import List, Dict, Any, Optional
+import uuid
+from collections import defaultdict
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect
 import akshare as ak
 import pandas as pd
+from jose import JWTError, jwt
 
 from app.models.stocks import StockItem, StockAnalyzeRequest
 from app.models.auth import User
 from app.core.dependencies import get_current_user, get_user_report_dir
 from app.core.cache import stock_feature_cache
 from app.core.utils import sanitize_for_json, sanitize_data
-from src.storage.db import get_all_stocks, upsert_stock, delete_stock
+from src.auth import SECRET_KEY, ALGORITHM
+from src.storage.db import get_all_stocks, upsert_stock, delete_stock, get_user_by_username
 from src.data_sources.akshare_api import (
     get_stock_realtime_quote,
     get_stock_realtime_quote_min,
@@ -35,8 +39,208 @@ from src.data_sources.tushare_client import (
     get_stock_factors, get_chip_performance,
     _get_tushare_pro
 )
+from src.data_sources.itick_client import (
+    is_itick_enabled,
+    infer_region_and_code,
+    get_stock_quote as get_itick_stock_quote,
+    get_stock_quotes as get_itick_stock_quotes,
+    map_quote_to_legacy_fields as map_itick_quote_to_legacy_fields,
+)
+from src.services.itick_ws_gateway import itick_stock_ws_gateway
+
+
+def _chunk_list(values: List[str], chunk_size: int) -> List[List[str]]:
+    return [values[i:i + chunk_size] for i in range(0, len(values), chunk_size)]
+
+
+def _apply_itick_watchlist_quotes(stocks: List[Dict[str, Any]]) -> Tuple[List[StockItem], int]:
+    grouped_codes: Dict[str, List[str]] = defaultdict(list)
+    lookup_key_by_code: Dict[str, Tuple[Optional[str], str]] = {}
+    seen_by_region: Dict[str, set] = defaultdict(set)
+
+    for stock in stocks:
+        region, symbol = infer_region_and_code(stock.get("code", ""), stock.get("market"))
+        lookup_key_by_code[stock["code"]] = (region, symbol)
+        if not region or not symbol:
+            continue
+        if symbol in seen_by_region[region]:
+            continue
+        seen_by_region[region].add(symbol)
+        grouped_codes[region].append(symbol)
+
+    quotes_lookup: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for region, symbols in grouped_codes.items():
+        for chunk in _chunk_list(symbols, 60):
+            data = get_itick_stock_quotes(region, chunk)
+            for symbol, quote in data.items():
+                quotes_lookup[(region, symbol)] = quote
+
+    hit_count = 0
+    results: List[StockItem] = []
+    for stock in stocks:
+        item = dict(stock)
+        region, symbol = lookup_key_by_code.get(stock["code"], (None, ""))
+        if region and symbol:
+            quote = quotes_lookup.get((region, symbol))
+            if quote:
+                hit_count += 1
+                if quote.get("ld") is not None:
+                    item["price"] = float(quote["ld"])
+                if quote.get("chp") is not None:
+                    item["change_pct"] = float(quote["chp"])
+                if quote.get("v") is not None:
+                    item["volume"] = float(quote["v"])
+        results.append(StockItem(**item))
+
+    return results, hit_count
 
 router = APIRouter(prefix="/api/stocks", tags=["Stocks"])
+
+
+def _get_user_from_ws_token(token: str) -> Optional[User]:
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        return None
+
+    username = payload.get("sub")
+    user_id = payload.get("id")
+    if not username or not user_id:
+        return None
+
+    user_dict = get_user_by_username(username)
+    if not user_dict:
+        return None
+
+    if int(user_dict.get("id", 0)) != int(user_id):
+        return None
+
+    return User(
+        id=user_dict["id"],
+        username=user_dict["username"],
+        email=user_dict.get("email"),
+        is_active=bool(user_dict.get("is_active", True)),
+    )
+
+
+async def _stocks_live_sender(websocket: WebSocket, queue: asyncio.Queue) -> None:
+    while True:
+        event = await queue.get()
+        await websocket.send_json(event)
+
+
+@router.websocket("/live/ws")
+async def stocks_live_ws_endpoint(websocket: WebSocket):
+    token = (websocket.query_params.get("token") or "").strip()
+    current_user = _get_user_from_ws_token(token)
+    if not current_user:
+        await websocket.close(code=4401, reason="Unauthorized")
+        return
+
+    if not is_itick_enabled():
+        await websocket.close(code=1013, reason="iTick token not configured")
+        return
+
+    await websocket.accept()
+    client_id = f"user-{current_user.id}-{uuid.uuid4().hex[:10]}"
+
+    try:
+        queue = await itick_stock_ws_gateway.register_client(client_id)
+    except Exception as e:
+        await websocket.send_json({"type": "system", "event": "error", "message": str(e)})
+        await websocket.close(code=1011, reason="Gateway unavailable")
+        return
+
+    sender_task = asyncio.create_task(_stocks_live_sender(websocket, queue))
+    await websocket.send_json({
+        "type": "system",
+        "event": "connected",
+        "client_id": client_id,
+        "ts": int(datetime.now().timestamp() * 1000),
+    })
+
+    try:
+        while True:
+            payload = await websocket.receive_json()
+            if not isinstance(payload, dict):
+                continue
+
+            action = str(payload.get("ac", "")).strip().lower()
+            if action == "ping":
+                await websocket.send_json({
+                    "type": "system",
+                    "event": "pong",
+                    "ts": int(datetime.now().timestamp() * 1000),
+                })
+                continue
+
+            if action not in {"subscribe", "unsubscribe"}:
+                await websocket.send_json({
+                    "type": "system",
+                    "event": "error",
+                    "message": "unsupported action",
+                })
+                continue
+
+            symbol_raw = str(payload.get("symbol") or payload.get("code") or "").strip()
+            market_raw = str(payload.get("market") or "").strip()
+            region_raw = str(payload.get("region") or "").strip().upper()
+            if not symbol_raw:
+                await websocket.send_json({
+                    "type": "system",
+                    "event": "error",
+                    "message": "symbol is required",
+                })
+                continue
+
+            if region_raw:
+                symbol = symbol_raw.upper()
+                region = region_raw
+            else:
+                region, symbol = infer_region_and_code(symbol_raw, market_raw)
+                symbol = symbol.upper()
+
+            if not region or not symbol:
+                await websocket.send_json({
+                    "type": "system",
+                    "event": "error",
+                    "message": "unable to infer symbol region",
+                })
+                continue
+
+            types = payload.get("types")
+            type_list = [str(v) for v in types] if isinstance(types, list) else []
+            if action == "subscribe":
+                normalized = await itick_stock_ws_gateway.subscribe(client_id, symbol, region, type_list)
+                await websocket.send_json({
+                    "type": "system",
+                    "event": "subscribed",
+                    "symbol": symbol,
+                    "region": region,
+                    "types": normalized,
+                })
+            else:
+                normalized = await itick_stock_ws_gateway.unsubscribe(client_id, symbol, region, type_list)
+                await websocket.send_json({
+                    "type": "system",
+                    "event": "unsubscribed",
+                    "symbol": symbol,
+                    "region": region,
+                    "types": normalized,
+                })
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"stocks live websocket error: {e}")
+    finally:
+        sender_task.cancel()
+        try:
+            await sender_task
+        except asyncio.CancelledError:
+            pass
+        await itick_stock_ws_gateway.remove_client(client_id)
 
 
 @router.get("", response_model=List[StockItem])
@@ -47,6 +251,15 @@ async def get_stocks_endpoint(current_user: User = Depends(get_current_user)):
 
         if not stocks:
             return []
+
+        # iTick first for low-latency quotes when token is configured.
+        if is_itick_enabled():
+            try:
+                itick_results, hit_count = await asyncio.to_thread(_apply_itick_watchlist_quotes, stocks)
+                if hit_count > 0:
+                    return itick_results
+            except Exception as itick_err:
+                print(f"iTick watchlist quote failed, fallback to legacy providers: {itick_err}")
 
         # Try tushare first, then fall back to akshare
         quotes_lookup = {}
@@ -445,6 +658,12 @@ async def delete_stock_endpoint(code: str, current_user: User = Depends(get_curr
 async def get_stock_quote_endpoint(code: str, current_user: User = Depends(get_current_user)):
     """Get real-time stock quote."""
     try:
+        if is_itick_enabled():
+            region, symbol = infer_region_and_code(code)
+            if region and symbol:
+                quote = await asyncio.to_thread(get_itick_stock_quote, region, symbol)
+                if quote:
+                    return sanitize_data(map_itick_quote_to_legacy_fields(quote, code=symbol))
         data = await asyncio.to_thread(get_stock_realtime_quote, code)
         return sanitize_data(data)
     except Exception as e:
@@ -1014,13 +1233,38 @@ async def get_batch_stock_quotes(codes: str, current_user: User = Depends(get_cu
         if len(code_list) > 50:
             code_list = code_list[:50]
 
-        results = []
-        for code in code_list:
+        results: List[Dict[str, Any]] = []
+        resolved_codes = set()
+
+        # Try iTick batch by inferred market first.
+        if is_itick_enabled():
+            grouped: Dict[str, List[str]] = defaultdict(list)
+            code_map: Dict[Tuple[str, str], str] = {}
+            for raw_code in code_list:
+                region, symbol = infer_region_and_code(raw_code)
+                if not region or not symbol:
+                    continue
+                grouped[region].append(symbol)
+                code_map[(region, symbol)] = raw_code
+
+            for region, symbols in grouped.items():
+                for chunk in _chunk_list(symbols, 60):
+                    quotes = await asyncio.to_thread(get_itick_stock_quotes, region, chunk)
+                    for symbol, quote in quotes.items():
+                        legacy = map_itick_quote_to_legacy_fields(quote, code=symbol)
+                        original_code = code_map.get((region, symbol), symbol)
+                        legacy["代码"] = original_code
+                        results.append(legacy)
+                        resolved_codes.add(original_code)
+
+        # Fallback for unresolved symbols.
+        unresolved = [c for c in code_list if c not in resolved_codes]
+        for code in unresolved:
             try:
                 quote = await asyncio.to_thread(get_stock_realtime_quote, code)
                 if quote:
                     results.append(quote)
-            except:
+            except Exception:
                 pass
 
         return sanitize_data({"quotes": results})

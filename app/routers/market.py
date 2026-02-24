@@ -15,6 +15,13 @@ from app.core.config import MARKET_FUNDS_CACHE, MARKET_STOCKS_CACHE, CONFIG_DIR
 from app.core.cache import indices_cache
 from app.core.utils import sanitize_data
 from src.data_sources.akshare_api import search_funds, get_stock_realtime_quote, get_stock_realtime_quote_min, get_stock_history
+from src.data_sources.itick_client import (
+    is_itick_enabled,
+    infer_region_and_code,
+    get_stock_quote as get_itick_stock_quote,
+    get_stock_depth as get_itick_stock_depth,
+    map_quote_to_legacy_fields as map_itick_quote_to_legacy_fields,
+)
 from src.data_sources.tushare_client import search_funds_tushare, _get_tushare_pro
 from src.storage.db import search_stock_basic, get_stock_basic_count
 
@@ -199,10 +206,19 @@ async def search_market_stocks(query: str = ""):
 async def get_stock_details_endpoint(code: str):
     """Get stock details including realtime quote and company info."""
     try:
-        # 优先使用分钟线获取实时行情（更稳定）
-        quote = get_stock_realtime_quote_min(code)
-        
-        # 如果分钟线没有数据，降级到原方法
+        quote = {}
+
+        # iTick first for low-latency realtime quote.
+        if is_itick_enabled():
+            region, symbol = infer_region_and_code(code)
+            if region and symbol:
+                itick_quote = await asyncio.to_thread(get_itick_stock_quote, region, symbol)
+                if itick_quote:
+                    quote = map_itick_quote_to_legacy_fields(itick_quote, code=symbol)
+
+        # Fallback to current data source chain.
+        if not quote or not quote.get('最新价'):
+            quote = get_stock_realtime_quote_min(code)
         if not quote or not quote.get('最新价'):
             quote = get_stock_realtime_quote(code)
 
@@ -256,6 +272,27 @@ async def get_stock_details_endpoint(code: str):
     except Exception as e:
         print(f"Error fetching stock details: {e}")
         return {}
+
+
+@router.get("/api/market/stocks/{code}/depth")
+async def get_stock_depth_endpoint(code: str):
+    """Get stock order-book depth (iTick)."""
+    try:
+        if not is_itick_enabled():
+            return {"symbol": code, "a": [], "b": [], "source": "disabled"}
+
+        region, symbol = infer_region_and_code(code)
+        if not region or not symbol:
+            return {"symbol": code, "a": [], "b": [], "source": "unsupported"}
+
+        depth = await asyncio.to_thread(get_itick_stock_depth, region, symbol)
+        if not depth:
+            return {"symbol": symbol, "a": [], "b": [], "source": "itick"}
+
+        return sanitize_data(depth)
+    except Exception as e:
+        print(f"Depth error: {e}")
+        return {"symbol": code, "a": [], "b": []}
 
 
 @router.get("/api/market/stocks/{code}/history")

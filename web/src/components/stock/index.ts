@@ -7,3 +7,4 @@ export { default as AIDiagnosisCard } from './AIDiagnosisCard';
 export { default as MarketPulseCard } from './MarketPulseCard';
 export { default as HotStocksList } from './HotStocksList';
 export { default as LimitPoolTabs } from './LimitPoolTabs';
+export { default as LiveMonitorTab } from './LiveMonitorTab';

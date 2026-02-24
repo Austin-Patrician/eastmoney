@@ -3,6 +3,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _env_bool(name: str, default: bool) -> bool:
+	raw = os.getenv(name)
+	if raw is None:
+		return default
+	return raw.strip().lower() in {"1", "true", "yes", "on"}
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_API_ENDPOINT = os.getenv("GEMINI_API_ENDPOINT")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
@@ -41,6 +48,14 @@ DATA_SOURCE_PROVIDER = os.getenv("DATA_SOURCE_PROVIDER", "hybrid").lower()
 
 # Cache TTL for data sources (in seconds)
 DATA_SOURCE_CACHE_TTL = int(os.getenv("DATA_SOURCE_CACHE_TTL", "60"))
+
+# iTick Configuration (optional, used for low-latency realtime quotes)
+ITICK_TOKEN = os.getenv("ITICK_TOKEN", "").strip()
+ITICK_STOCK_API_BASE = os.getenv("ITICK_STOCK_API_BASE", "https://api.itick.org/stock").rstrip("/")
+ITICK_STOCK_WS_URL = os.getenv("ITICK_STOCK_WS_URL", "wss://api.itick.org/stock").strip()
+ITICK_TIMEOUT_SECONDS = float(os.getenv("ITICK_TIMEOUT_SECONDS", "8"))
+ITICK_SSL_VERIFY = _env_bool("ITICK_SSL_VERIFY", True)
+ITICK_CA_BUNDLE = os.getenv("ITICK_CA_BUNDLE", "").strip()
 
 # Paths
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

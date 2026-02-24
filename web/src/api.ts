@@ -722,6 +722,28 @@ export const fetchStockHistory = async (code: string): Promise<NavPoint[]> => {
     return response.data;
 };
 
+export interface StockLiveEvent {
+  type: string;
+  symbol?: string;
+  region?: string;
+  ts?: number;
+  event?: string;
+  message?: string;
+  data?: Record<string, any>;
+}
+
+export const getStocksLiveWsUrl = (token: string): string => {
+  const wsPath = `${API_BASE}/stocks/live/ws`;
+  const url = /^https?:\/\//i.test(API_BASE)
+    ? new URL(wsPath)
+    : new URL(wsPath, window.location.origin);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  if (token) {
+    url.searchParams.set('token', token);
+  }
+  return url.toString();
+};
+
 
 // --- Stock Analysis API ---
 
