@@ -34,6 +34,21 @@
 
 ---
 
+## 赞助支持
+
+<table>
+  <tr>
+    <td width="80" align="center" valign="middle">
+      <a href="https://newapi.20250230.xyz"><img src="web/public/wordless.png" alt="NewAPI 品牌图标" width="64"></a>
+    </td>
+    <td valign="middle">
+      <a href="https://newapi.20250230.xyz"><strong>NewAPI</strong></a> 汇聚 OpenAI、Claude、Google Gemini 等模型与服务，支持 Image 2.6 图像生成，并接入 DeepSeek、Kimi、GLM、Qwen 等国内领先服务商。不受限制的 GPT 模型价格低至官方标价的 0.1 倍；Claude 稳定高缓存分组低至 0.8 倍；DeepSeek 通过官方渠道低至 0.3 倍。
+    </td>
+  </tr>
+</table>
+
+---
+
 ## 技术栈
 
 ### 后端
